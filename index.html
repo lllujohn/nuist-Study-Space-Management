@@ -1,0 +1,1417 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>南信大自习空间管理子系统</title>
+  <meta name="description" content="SaaS-grade Library Space Management" />
+
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  
+  <!-- Element Plus CSS (Dark Mode) -->
+  <link rel="stylesheet" href="https://unpkg.com/element-plus/theme-chalk/dark/css-vars.css" />
+  <link rel="stylesheet" href="https://unpkg.com/element-plus/dist/index.css" />
+  
+  <!-- Scripts -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script src="https://unpkg.com/element-plus/dist/index.full.min.js"></script>
+  <script src="https://unpkg.com/@element-plus/icons-vue/dist/index.iife.min.js"></script>
+  <!-- ECharts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+
+  <style>
+    :root {
+      --bg-base: #000000;
+      --bg-surface: #0a0a0a;
+      --bg-surface-hover: #1f1f1f;
+      --border-color: #27272a;
+      --text-primary: #ededed;
+      --text-secondary: #a1a1aa;
+      --accent: #fff;
+      --accent-invert: #000;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body, #app {
+      height: 100%;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg-base);
+      color: var(--text-primary);
+    }
+
+    /* Override Element Plus Dark Theme variables to match SaaS look */
+    html.dark {
+      --el-bg-color: var(--bg-surface);
+      --el-bg-color-overlay: var(--bg-base);
+      --el-border-color-light: var(--border-color);
+      --el-border-color-lighter: var(--border-color);
+      --el-text-color-primary: var(--text-primary);
+      --el-text-color-regular: var(--text-secondary);
+      --el-fill-color-blank: var(--bg-surface);
+    }
+
+    /* Layout */
+    .layout { display: flex; height: 100vh; overflow: hidden; }
+
+    /* Sidebar */
+    .sidebar {
+      width: 240px;
+      flex-shrink: 0;
+      background: var(--bg-surface);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      z-index: 10;
+    }
+    .sidebar-header {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px 20px 16px;
+      border-bottom: 1px solid var(--border-color);
+      font-weight: 600;
+      font-size: 16px;
+      letter-spacing: -0.02em;
+    }
+    .sidebar-header img { width: 64px; height: 64px; margin-bottom: 12px; border-radius: 50%; object-fit: cover; }
+    .sidebar-header svg { width: 20px; height: 20px; margin-right: 8px; fill: var(--text-primary); }
+    .sidebar-menu { flex: 1; padding: 16px 12px; display: flex; flex-direction: column; gap: 4px; }
+    .menu-item {
+      display: flex; align-items: center; padding: 8px 12px;
+      border-radius: 6px; cursor: pointer; color: var(--text-secondary);
+      font-size: 14px; font-weight: 500; transition: all 0.2s;
+    }
+    .menu-item svg { width: 18px; height: 18px; margin-right: 12px; }
+    .menu-item:hover { background: var(--bg-surface-hover); color: var(--text-primary); }
+    .menu-item.active { background: var(--bg-surface-hover); color: var(--text-primary); }
+
+    /* Main Area */
+    .main-area { flex: 1; display: flex; flex-direction: column; overflow: hidden; position: relative; }
+    
+    /* Top Header - Glassmorphism */
+    .top-header {
+      height: 64px;
+      position: sticky; top: 0; z-index: 50;
+      background: rgba(0, 0, 0, 0.6);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border-bottom: 1px solid var(--border-color);
+      display: flex; align-items: center; padding: 0 32px;
+      font-size: 14px; font-weight: 500; color: var(--text-secondary);
+    }
+    .top-header .breadcrumb { color: var(--text-primary); margin-left: 8px; }
+
+    /* Content Area */
+    .content-area { flex: 1; overflow-y: auto; padding: 32px; }
+    .page-title { font-size: 24px; font-weight: 600; margin-bottom: 8px; letter-spacing: -0.03em; }
+    .page-subtitle { font-size: 14px; color: var(--text-secondary); margin-bottom: 32px; }
+
+    /* Cards */
+    .saas-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 24px;
+      margin-bottom: 24px;
+    }
+
+    /* ECharts Containers */
+    .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); gap: 24px; }
+    .chart-box { height: 320px; width: 100%; }
+
+    /* Store Grid */
+    .store-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 24px; }
+    .product-card {
+      border: 1px solid var(--border-color);
+      border-radius: 12px; overflow: hidden;
+      background: var(--bg-surface);
+      transition: border-color 0.2s;
+    }
+    .product-card:hover { border-color: #555; }
+    .product-img { width: 100%; height: 160px; object-fit: cover; }
+    .product-info { padding: 20px; }
+    .product-title { font-size: 16px; font-weight: 600; margin-bottom: 8px; }
+    .product-desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 16px; min-height: 40px; }
+    .product-footer { display: flex; justify-content: space-between; align-items: center; }
+    .points-tag { background: #27272a; padding: 4px 10px; border-radius: 16px; font-size: 12px; font-weight: 600; }
+
+    /* El-Table Overrides */
+    .el-table { --el-table-border-color: var(--border-color); --el-table-header-bg-color: #000; --el-table-bg-color: transparent; --el-table-tr-bg-color: transparent; }
+    .el-table th.el-table__cell { font-weight: 500; color: var(--text-secondary); }
+    .el-table--border .el-table__inner-wrapper::after, .el-table--border::after, .el-table--border::before, .el-table__inner-wrapper::before { background-color: var(--border-color); }
+
+    /* ====== Login Page ====== */
+    .login-overlay {
+      position: fixed; inset: 0; z-index: 9999;
+      background: #000;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .login-box {
+      width: 420px;
+      background: #0a0a0a;
+      border: 1px solid #27272a;
+      border-radius: 16px;
+      padding: 40px;
+      box-shadow: 0 25px 60px rgba(0,0,0,.8);
+    }
+    .login-logo { text-align: center; margin-bottom: 28px; }
+    .login-logo img { width: 64px; height: 64px; border-radius: 50%; margin-bottom: 12px; display: block; margin-left: auto; margin-right: auto; }
+    .login-logo h2 { font-size: 20px; font-weight: 700; color: #ededed; margin: 0 0 4px; }
+    .login-logo p  { font-size: 13px; color: var(--text-secondary); margin: 0; }
+    .login-tabs { display: flex; border-bottom: 1px solid #27272a; margin-bottom: 24px; }
+    .login-tab { flex: 1; padding: 10px; text-align: center; font-size: 14px; font-weight: 500; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; transition: all .2s; }
+    .login-tab.active { color: #ededed; border-bottom-color: #ededed; }
+    .login-footer { text-align: center; margin-top: 16px; font-size: 13px; color: var(--text-secondary); }
+    .login-footer span { color: #ededed; cursor: pointer; text-decoration: underline; }
+    .user-badge { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-top: 1px solid var(--border-color); margin-top: auto; font-size: 13px; }
+    .user-avatar { width: 30px; height: 30px; border-radius: 50%; background: linear-gradient(135deg,#3b82f6,#8b5cf6); display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; color: #fff; flex-shrink: 0; }
+    .user-name { font-weight: 500; color: var(--text-primary); flex: 1; }
+    .logout-btn { font-size: 12px; color: var(--text-secondary); cursor: pointer; padding: 4px 8px; border-radius: 4px; }
+    .logout-btn:hover { color: #ef4444; background: rgba(239,68,68,.1); }
+    .admin-badge { font-size: 10px; font-weight: 600; background: linear-gradient(135deg,#f59e0b,#ef4444); color: #fff; padding: 2px 6px; border-radius: 4px; }
+    .sidebar-divider { margin: 8px 12px; border: none; border-top: 1px solid var(--border-color); }
+    /* Announcement banner */
+    .ann-banner { background: linear-gradient(90deg,rgba(59,130,246,.15),rgba(139,92,246,.15)); border: 1px solid rgba(59,130,246,.3); border-radius: 10px; padding: 14px 18px; margin-bottom: 20px; }
+    .ann-banner-title { font-size: 12px; font-weight: 600; color: #60a5fa; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .05em; }
+    .ann-item { padding: 6px 0; border-bottom: 1px solid rgba(255,255,255,.05); cursor: pointer; }
+    .ann-item:last-child { border-bottom: none; }
+    .ann-item-title { font-size: 13px; font-weight: 500; color: #ededed; }
+    .ann-item-date  { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <!-- ====== Login Overlay ====== -->
+    <div class="login-overlay" v-if="!isLoggedIn">
+      <div class="login-box">
+        <div class="login-logo">
+          <img :src="API_BASE + '/images/nuist_badge.png'" alt="NUIST" onerror="this.style.display='none'" />
+          <h2>南信大自习空间</h2>
+          <p>Nanjing University of Information Science &amp; Technology</p>
+        </div>
+        <!-- Tabs: 学生 / 管理员 / 忘记密码 -->
+        <div class="login-tabs">
+          <div class="login-tab" :class="{active: loginTab==='student'}" @click="loginTab='student'">学生登录</div>
+          <div class="login-tab" :class="{active: loginTab==='register'}" @click="loginTab='register'">注册账号</div>
+          <div class="login-tab" :class="{active: loginTab==='admin'}" @click="loginTab='admin'">管理员</div>
+        </div>
+
+        <!-- 学生登录 -->
+        <el-form v-if="loginTab==='student'" @submit.prevent="doStudentLogin" label-position="top">
+          <el-form-item label="学号">
+            <el-input v-model="loginForm.student_id" placeholder="请输入12位学号" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="loginForm.password" type="password" placeholder="请输入密码" show-password />
+          </el-form-item>
+          <el-button type="primary" style="width:100%;background:#ededed;color:#000;border:none;font-weight:600;" :loading="loginLoading" @click="doStudentLogin">登 录</el-button>
+        </el-form>
+
+        <!-- 注册账号 -->
+        <el-form v-if="loginTab==='register'" @submit.prevent="doRegister" label-position="top">
+          <el-form-item label="学号">
+            <el-input v-model="regForm.student_id" placeholder="12位学号" />
+          </el-form-item>
+          <el-form-item label="姓名">
+            <el-input v-model="regForm.name" placeholder="请输入真实姓名" />
+          </el-form-item>
+          <el-form-item label="手机号">
+            <el-input v-model="regForm.phone" placeholder="用于找回密码" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="regForm.password" type="password" placeholder="请设置密码" show-password />
+          </el-form-item>
+          <el-button type="primary" style="width:100%;background:#ededed;color:#000;border:none;font-weight:600;" :loading="loginLoading" @click="doRegister">注 册</el-button>
+        </el-form>
+
+        <!-- 管理员登录 -->
+        <el-form v-if="loginTab==='admin'" @submit.prevent="doAdminLogin" label-position="top">
+          <el-form-item label="管理员账号">
+            <el-input v-model="adminForm.username" placeholder="admin" />
+          </el-form-item>
+          <el-form-item label="密码">
+            <el-input v-model="adminForm.password" type="password" placeholder="请输入密码" show-password />
+          </el-form-item>
+          <el-button type="primary" style="width:100%;background:linear-gradient(135deg,#f59e0b,#ef4444);color:#fff;border:none;font-weight:600;" :loading="loginLoading" @click="doAdminLogin">管理员登录</el-button>
+        </el-form>
+
+        <!-- 忘记密码入口 -->
+        <div class="login-footer" v-if="loginTab!=='admin'">
+          <span @click="loginTab='reset'">忘记密码？</span>
+        </div>
+
+        <!-- 找回密码 -->
+        <el-form v-if="loginTab==='reset'" @submit.prevent="doResetPwd" label-position="top">
+          <el-form-item label="学号">
+            <el-input v-model="resetForm.student_id" placeholder="12位学号" />
+          </el-form-item>
+          <el-form-item label="预留手机号">
+            <el-input v-model="resetForm.phone" placeholder="注册时填写的手机号" />
+          </el-form-item>
+          <el-form-item label="新密码">
+            <el-input v-model="resetForm.new_password" type="password" placeholder="请设置新密码" show-password />
+          </el-form-item>
+          <el-button type="primary" style="width:100%;background:#ededed;color:#000;border:none;font-weight:600;" :loading="loginLoading" @click="doResetPwd">重置密码</el-button>
+          <div class="login-footer" style="margin-top:12px;"><span @click="loginTab='student'">← 返回登录</span></div>
+        </el-form>
+      </div>
+    </div>
+
+    <div class="layout" v-if="isLoggedIn">
+      <!-- Sidebar -->
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <img :src="API_BASE + '/images/nuist_badge.png'" alt="南信大 Logo" onerror="this.style.display='none'" />
+          <div style="display: flex; align-items: center;">
+            <svg viewBox="0 0 24 24"><path d="M18 2H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM6 4h5v8l-2.5-1.5L6 12V4z"/></svg>
+            <span>南信大自习空间</span>
+          </div>
+        </div>
+        <div class="sidebar-menu">
+          <!-- Student menus (only shown when not admin) -->
+          <template v-if="!isAdmin">
+          <div class="menu-item" :class="{active: activeMenu === 'spaces'}" @click="activeMenu = 'spaces'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h18v18H3zM3 9h18M9 21V9"/></svg>
+            自习预约
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'my_reservations'}" @click="activeMenu = 'my_reservations'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line></svg>
+            我的预约
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'dashboard'}" @click="activeMenu = 'dashboard'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9"/><rect x="14" y="3" width="7" height="5"/><rect x="14" y="12" width="7" height="9"/><rect x="3" y="16" width="7" height="5"/></svg>
+            数据大屏
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'rules'}" @click="activeMenu = 'rules'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            规则说明
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'store'}" @click="activeMenu = 'store'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="9" cy="21" r="1"/><circle cx="20" cy="21" r="1"/><path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6"/></svg>
+            积分商城
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'repairs'}" @click="activeMenu = 'repairs'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            设备报修
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'profile'}" @click="activeMenu = 'profile'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+            个人中心
+          </div>
+          </template>
+
+          <!-- Admin menus (only shown when admin) -->
+          <template v-if="isAdmin">
+          <div style="font-size:11px;font-weight:600;color:var(--text-secondary);padding:4px 12px 8px;text-transform:uppercase;letter-spacing:.06em;">后台管理</div>
+          <div class="menu-item" :class="{active: activeMenu === 'admin_rooms'}" @click="loadAdminRooms(); activeMenu = 'admin_rooms'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+            阅览室管理
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'admin_tickets'}" @click="loadAdminTickets(); activeMenu = 'admin_tickets'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+            工单审批
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'admin_users'}" @click="loadAdminUsers(); activeMenu = 'admin_users'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+            用户管理
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'admin_announcements'}" @click="loadAnnouncements(); activeMenu = 'admin_announcements'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 8h1a4 4 0 0 1 0 8h-1"/><path d="M2 8h16v9a4 4 0 0 1-4 4H6a4 4 0 0 1-4-4V8z"/><line x1="6" y1="1" x2="6" y2="4"/><line x1="10" y1="1" x2="10" y2="4"/><line x1="14" y1="1" x2="14" y2="4"/></svg>
+            公告管理
+          </div>
+          <div class="menu-item" :class="{active: activeMenu === 'admin_logs'}" @click="loadAdminLogs(); activeMenu = 'admin_logs'">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
+            操作日志
+          </div>
+          </template>
+        </div>
+
+        <!-- User badge at bottom of sidebar -->
+        <div class="user-badge">
+          <div class="user-avatar">{{ (currentUser?.name || currentUser?.username || 'U').charAt(0) }}</div>
+          <div class="user-name">
+            {{ currentUser?.name || currentUser?.username }}
+            <span class="admin-badge" v-if="isAdmin">管理员</span>
+          </div>
+          <div class="logout-btn" @click="doLogout">退出</div>
+        </div>
+      </aside>
+
+
+      <!-- Main Area -->
+      <main class="main-area">
+        <header class="top-header" style="justify-content: space-between;">
+          <div>控制台 <span class="breadcrumb">/ {{ menuTitle }}</span></div>
+          <div style="font-size: 13px; font-variant-numeric: tabular-nums;">{{ currentTime }}</div>
+        </header>
+        
+        <div class="content-area">
+          
+          <!-- 1. Dashboard -->
+          <div v-show="activeMenu === 'dashboard'">
+            <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 4px;">
+              <div>
+                <h1 class="page-title" style="margin-bottom: 4px;">数据大屏</h1>
+                <p class="page-subtitle">实时统计数据与全校借阅分析概览。</p>
+              </div>
+              <el-button
+                type="primary"
+                size="default"
+                style="background:#ededed; color:#000; border:none; font-weight:600;"
+                @click="exportStats"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:14px;height:14px;margin-right:6px;vertical-align:middle"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                导出统计报表 (CSV)
+              </el-button>
+            </div>
+            
+            <!-- 公告滚动栏 -->
+            <div class="ann-banner" v-if="announcements.length">
+              <div class="ann-banner-title">📢 系统公告</div>
+              <div class="ann-item" v-for="a in announcements.slice(0,3)" :key="a.id">
+                <div class="ann-item-title">{{ a.title }}</div>
+                <div class="ann-item-date">{{ a.created_at }}</div>
+              </div>
+            </div>
+
+            <div class="charts-grid">
+              <div class="saas-card">
+                <div style="font-weight: 500; margin-bottom: 16px;">各阅览室占座率</div>
+                <div id="chartOccupancy" class="chart-box"></div>
+              </div>
+              <div class="saas-card">
+                <div style="font-weight: 500; margin-bottom: 16px;">近七日全校违约趋势</div>
+                <div id="chartTrend" class="chart-box"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. Spaces (Rooms & Seats) -->
+          <div v-show="activeMenu === 'spaces'">
+            <h1 class="page-title">自习预约</h1>
+            <p class="page-subtitle">管理并预约校园内的各类学习空间。</p>
+            
+            <div class="saas-card">
+              <el-table :data="rooms" v-loading="roomsLoading" style="width: 100%">
+                <el-table-column label="空间名称" min-width="200">
+                  <template #default="{ row }">
+                    <div style="font-weight: 600;">{{ row.room_name }}</div>
+                    <div style="font-size: 12px; color: var(--text-secondary);">{{ row.location }}</div>
+                  </template>
+                </el-table-column>
+                <el-table-column label="状态" width="100">
+                  <template #default="{ row }">
+                    <el-tag :type="row.room_status === 1 ? 'success' : 'info'" size="small" effect="dark" color="#27272a" style="border:none">
+                      {{ row.room_status === 1 ? '开放中' : '已关闭' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="available_seats" label="空闲座位" width="100" ></el-table-column>
+                <el-table-column prop="total_seats" label="总座位" width="100" ></el-table-column>
+                <el-table-column label="操作" width="120" fixed="right">
+                  <template #default="{ row }">
+                    <el-button color="#ededed" style="color:#000; font-weight:600; border:none;" size="small" @click="openSeats(row)">查看座位</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+          <!-- 3. Store -->
+          <div v-show="activeMenu === 'store'">
+            <h1 class="page-title">积分商城</h1>
+            <p class="page-subtitle">使用学习积分兑换专属奖励或权益。</p>
+            
+            <div class="store-grid" v-loading="storeLoading">
+              <div class="product-card" v-for="p in products" :key="p.product_id">
+                <img :src="p.image_url.startsWith('http') ? p.image_url : API_BASE + p.image_url" class="product-img" alt="product image"/>
+                <div class="product-info">
+                  <div class="product-title">{{ p.name }}</div>
+                  <div class="product-desc">{{ p.description }}</div>
+                  <div class="product-footer">
+                    <span class="points-tag">{{ p.points_required }} 积分</span>
+                    <el-button color="#ededed" style="color:#000; border:none; padding:8px 16px" size="small" :disabled="p.stock<=0" @click="openExchange(p)">
+                      {{ p.stock > 0 ? '立即兑换' : '已售罄' }}
+                    </el-button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. Repairs -->
+          <div v-show="activeMenu === 'repairs'">
+            <h1 class="page-title">设备报修</h1>
+            <p class="page-subtitle">报告损坏的插座、座椅或灯具，共建良好环境。</p>
+            
+            <div class="saas-card">
+              <el-form :model="repairForm" inline @submit.prevent>
+                
+                <el-form-item label="选择阅览室">
+                  <el-select v-model="repairForm.room_id" placeholder="请选择" style="width: 150px;" @change="handleRepairRoomChange">
+                    <el-option v-for="r in rooms" :key="r.room_id" :label="r.room_name" :value="r.room_id"></el-option>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="选择座位">
+                  <el-select v-model="repairForm.seat_id" placeholder="选填" style="width: 120px;" clearable>
+                    <el-option v-for="s in repairSeats" :key="s.seat_id" :label="s.seat_no" :value="s.seat_id"></el-option>
+                  </el-select>
+                </el-form-item>
+                <el-form-item label="故障描述">
+                  <el-input v-model="repairForm.description" placeholder="例如：插座没电、灯坏了" style="width: 300px;" ></el-input>
+                </el-form-item>
+                <el-form-item>
+                  <el-button color="#ededed" style="color:#000; border:none;" @click="submitRepair">提交工单</el-button>
+                </el-form-item>
+              </el-form>
+            </div>
+            
+            <div class="saas-card">
+              <el-table :data="repairs" v-loading="repairsLoading">
+                <el-table-column prop="ticket_id" label="工单号" width="80" ></el-table-column>
+                <el-table-column prop="room_name" label="阅览室" width="160" ></el-table-column>
+                <el-table-column prop="description" label="故障描述" min-width="200" ></el-table-column>
+                <el-table-column prop="status" label="处理状态" width="120">
+                  <template #default="{ row }">
+                    <span style="text-transform: capitalize; color: var(--text-secondary);">
+                      {{ row.status === 'pending' ? '待处理' : row.status === 'resolved' ? '已修复' : row.status }}
+                    </span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="created_at" label="提交时间" width="160" ></el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+          <!-- 5. Profile -->
+          <div v-show="activeMenu === 'profile'">
+            <h1 class="page-title">个人中心</h1>
+            <p class="page-subtitle">查看你的信用分、学习积分与近期违约记录。</p>
+            
+            <div class="saas-card" style="max-width: 600px;">
+              
+              
+              <div v-if="profile" style="margin-top: 32px;" v-loading="profileLoading">
+                <div style="font-size: 20px; font-weight: 600; margin-bottom: 24px;">{{ profile.name }} <span style="font-size:14px; color:var(--text-secondary); font-weight:400">{{ profile.student_id }}</span></div>
+                
+                <div style="display:flex; gap: 24px; margin-bottom: 24px;">
+                  <div style="flex:1; border: 1px solid var(--border-color); padding: 16px; border-radius: 8px;">
+                    <div style="color:var(--text-secondary); font-size: 13px; margin-bottom: 8px;">信用分</div>
+                    <div :style="{fontSize: '32px', fontWeight: 600, color: profile.credit_score < 60 ? '#ef4444' : '#22c55e'}">{{ profile.credit_score }}</div>
+                  </div>
+                  <div style="flex:1; border: 1px solid var(--border-color); padding: 16px; border-radius: 8px;">
+                    <div style="color:var(--text-secondary); font-size: 13px; margin-bottom: 8px;">学习积分</div>
+                    <div style="font-size: 32px; font-weight: 600; color: #fff;">{{ profile.study_points }}</div>
+                  </div>
+                </div>
+
+                <div v-if="profile.is_blacklisted" style="padding: 12px; background: rgba(239, 68, 68, 0.1); border: 1px solid #ef4444; border-radius: 6px; color: #ef4444; font-size: 14px; margin-bottom: 24px;">
+                  <strong>已被列入黑名单：</strong> {{ profile.blacklist_reason }}
+                </div>
+
+                <div style="font-weight: 500; margin-bottom: 12px;">近期违约记录</div>
+                <el-table :data="profile.violation_logs" style="width: 100%" size="small">
+                  <el-table-column prop="created_at" label="日期" width="160" ></el-table-column>
+                  <el-table-column prop="violation_type" label="违约类型" ></el-table-column>
+                </el-table>
+              </div>
+            </div>
+          </div>
+
+          <!-- 6. My Reservations -->
+          <div v-show="activeMenu === 'my_reservations'">
+            <h1 class="page-title">我的预约</h1>
+            <p class="page-subtitle">管理你当前的座位预约，进行签到、暂离或结束操作。</p>
+            
+            <div class="saas-card" style="max-width: 800px;">
+              
+              
+              <div v-if="myReservations.length > 0 || hasSearchedRes" style="margin-top: 32px;" v-loading="resLoading">
+                <el-table :data="myReservations" style="width: 100%">
+                  <el-table-column prop="room_name" label="阅览室" width="140" ></el-table-column>
+                  <el-table-column prop="seat_no" label="座位" width="80" ></el-table-column>
+                  <el-table-column label="时间" width="160">
+                    <template #default="{ row }">
+                      <div style="font-size: 12px">{{ row.reserve_date }}</div>
+                      <div style="font-size: 12px">{{ row.start_time }} - {{ row.end_time }}</div>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="状态" width="100">
+                    <template #default="{ row }">
+                      <el-tag :type="row.status==='active'?'success':row.status==='pending'?'warning':row.status==='away'?'danger':'info'" size="small" effect="dark" color="#27272a" style="border:none">
+                        {{ row.status === 'pending' ? '未签到' : row.status === 'active' ? '自习中' : row.status === 'away' ? '暂离' : row.status === 'completed' ? '已结束' : row.status === 'cancelled' ? '已取消' : '违约' }}
+                      </el-tag>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="操作" min-width="200">
+                    <template #default="{ row }">
+                      <template v-if="row.status === 'pending'">
+                        <el-button size="small" color="#ededed" style="color:#000; border:none;" @click="handleResAction(row.reservation_id, 'checkin')">签到</el-button>
+                        <el-button size="small" plain type="danger" style="background:transparent; border-color:var(--border-color)" @click="handleResAction(row.reservation_id, 'cancel')">取消</el-button>
+                      </template>
+                      <template v-if="row.status === 'active'">
+                        <el-button size="small" plain type="warning" style="background:transparent; border-color:var(--border-color)" @click="handleResAction(row.reservation_id, 'away')">暂离</el-button>
+                        <el-button size="small" color="#ededed" style="color:#000; border:none;" @click="handleResAction(row.reservation_id, 'checkout')">结束自习</el-button>
+                      </template>
+                      <template v-if="row.status === 'away'">
+                        <el-button size="small" color="#ededed" style="color:#000; border:none;" @click="handleResAction(row.reservation_id, 'checkin')">恢复自习</el-button>
+                        <el-button size="small" plain style="background:transparent; border-color:var(--border-color)" @click="handleResAction(row.reservation_id, 'checkout')">结束自习</el-button>
+                      </template>
+                    </template>
+                  </el-table-column>
+                </el-table>
+              </div>
+              <div v-else-if="hasSearchedRes" style="margin-top: 32px; color: var(--text-secondary);">
+                未找到相关预约记录。
+              </div>
+            </div>
+          </div>
+
+          <!-- 7. Rules & Docs -->
+          <div v-show="activeMenu === 'rules'">
+            <h1 class="page-title">系统规则说明</h1>
+            <p class="page-subtitle">了解自习室的信誉分、积分规则及违规处理机制。</p>
+            
+            <div class="saas-card" style="max-width: 800px; line-height: 1.8;">
+              <h3 style="margin-top: 0; color: #ededed;">1. 什么是信誉分 (Credit Score)？</h3>
+              <p style="color: var(--text-secondary); margin-bottom: 24px;">
+                信誉分是衡量你遵守自习室纪律的重要指标。每位同学初始满分为 <strong>100</strong> 分，且在<strong>每月 1 日自动恢复至 100 分</strong>。<br/>
+                - 如果你的信誉分低于 <strong>60</strong> 分，将被系统自动加入黑名单，当月禁止所有预约操作！<br/>
+                - <strong>违规扣分标准：</strong><br/>
+                &nbsp;&nbsp;① <strong>爽约（逾期20分钟未签到）</strong>：扣除 <strong>10 分</strong>/次。<br/>
+                &nbsp;&nbsp;② <strong>暂离超时未返回</strong>：扣除 <strong>10 分</strong>/次。<br/>
+                &nbsp;&nbsp;③ <strong>提前离开未结束自习</strong>：扣除 <strong>5 分</strong>/次。
+              </p>
+              
+              <h3 style="color: #ededed;">2. 什么是学习积分 (Study Points)？</h3>
+              <p style="color: var(--text-secondary); margin-bottom: 24px;">
+                学习积分是平台对你“有效学习”的奖励，<strong>永久累计，不清零</strong>，专门用于在【积分商城】兑换咖啡、套餐等奖品。<br/>
+                - <strong>获取规则：</strong> 每次你成功“签到”并最终“结束自习”，系统会根据你的有效自习时长自动发放积分。<strong>每有效自习 1 小时，奖励 5 积分</strong>。<br/>
+                - <strong>注意：</strong> 如果该次自习发生违规行为（比如暂离未回），不仅会扣除信誉分，且该次预约不会产生任何学习积分。
+              </p>
+              
+              <h3 style="color: #ededed;">3. 预约与暂离机制</h3>
+              <p style="color: var(--text-secondary); margin-bottom: 24px;">
+                - <strong>签到：</strong> 预约时间开始后，系统最多为你保留 <strong>20分钟</strong>。若逾期仍未在【我的预约】中点击“签到”，系统会自动释放该座位供他人选择，并将你判定为爽约。<br/>
+                - <strong>暂离：</strong> 如果你需要中途离开，请务必点击“暂离”，座位将为你保留 <strong>20 分钟</strong>。若 20 分钟内未“恢复自习”，系统会自动释放座位并按暂离超时扣分。<br/>
+                - <strong>取消：</strong> 临时有事不能来自习时，只要在预约开始时间之前点击“取消”，即可无责取消，不会扣除任何分数。
+              </p>
+            </div>
+          </div>
+
+          <!-- ========== Admin Panel Pages ========== -->
+          
+          <!-- Admin: Rooms & Seats -->
+          <div v-show="activeMenu === 'admin_rooms'">
+            <div style="display:flex; justify-content:space-between; margin-bottom: 24px;">
+              <div>
+                <h1 class="page-title">阅览室与座位管理</h1>
+                <p class="page-subtitle">添加新阅览室或维护座位状态。</p>
+              </div>
+              <el-button type="primary" @click="openAddRoomDialog">新增阅览室</el-button>
+            </div>
+            <div class="saas-card">
+              <el-table :data="adminRooms" v-loading="adminLoading" style="width: 100%">
+                <el-table-column prop="room_id" label="ID" width="60"></el-table-column>
+                <el-table-column prop="room_name" label="阅览室名称"></el-table-column>
+                <el-table-column prop="location" label="位置"></el-table-column>
+                <el-table-column label="开放时间">
+                  <template #default="{row}">{{formatTime(row.open_time)}} - {{formatTime(row.close_time)}}</template>
+                </el-table-column>
+                <el-table-column label="座位(空闲/总)">
+                  <template #default="{row}">{{row.available_seats}} / {{row.total_seats}}</template>
+                </el-table-column>
+                <el-table-column label="操作" width="160">
+                  <template #default="{row}">
+                    <el-button size="small" type="primary" link @click="openAdminSeatDrawer(row)">管理座位</el-button>
+                    <el-button size="small" type="danger" link @click="deleteRoom(row.room_id)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+          <!-- Admin: Tickets -->
+          <div v-show="activeMenu === 'admin_tickets'">
+            <h1 class="page-title">工单审批</h1>
+            <p class="page-subtitle">处理学生的设备报修请求。</p>
+            <div class="saas-card">
+              <el-table :data="adminTickets" v-loading="adminLoading" style="width: 100%">
+                <el-table-column prop="ticket_id" label="ID" width="60"></el-table-column>
+                <el-table-column prop="student_id" label="申报人" width="120"></el-table-column>
+                <el-table-column prop="room_name" label="阅览室" width="120"></el-table-column>
+                <el-table-column prop="seat_no" label="座位" width="80"></el-table-column>
+                <el-table-column prop="description" label="问题描述"></el-table-column>
+                <el-table-column prop="created_at" label="提交时间" width="160"></el-table-column>
+                <el-table-column label="状态" width="100">
+                  <template #default="{row}">
+                    <el-tag :type="row.status==='pending'?'warning':row.status==='processing'?'primary':'success'">
+                      {{ row.status==='pending'?'待处理':row.status==='processing'?'处理中':row.status==='resolved'?'已修复':'已关闭' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="操作" width="180">
+                  <template #default="{row}">
+                    <el-button v-if="row.status==='pending'" size="small" type="primary" link @click="updateTicketStatus(row.ticket_id, 'processing')">接单</el-button>
+                    <el-button v-if="row.status==='processing'" size="small" type="success" link @click="updateTicketStatus(row.ticket_id, 'resolved')">标记修复</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+          <!-- Admin: Users (Blacklist & Credit) -->
+          <div v-show="activeMenu === 'admin_users'">
+            <h1 class="page-title">用户管理</h1>
+            <p class="page-subtitle">管理学生信用分与封禁状态。</p>
+            <div class="saas-card">
+              <el-table :data="adminUsers" v-loading="adminLoading" style="width: 100%">
+                <el-table-column prop="student_id" label="学号" width="120"></el-table-column>
+                <el-table-column prop="name" label="姓名" width="100"></el-table-column>
+                <el-table-column prop="phone" label="手机号" width="120"></el-table-column>
+                <el-table-column prop="credit_score" label="信用分" width="80">
+                  <template #default="{row}">
+                    <span :style="{color: row.credit_score<60?'#ef4444':'#22c55e'}">{{row.credit_score}}</span>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="study_points" label="学习积分" width="80"></el-table-column>
+                <el-table-column label="操作" min-width="200">
+                  <template #default="{row}">
+                    <el-button size="small" type="primary" link @click="openCreditDialog(row)">调整信用分</el-button>
+                    <el-button v-if="row.credit_score>=60" size="small" type="danger" link @click="adminBanUser(row)">拉黑</el-button>
+                    <el-button v-else size="small" type="success" link @click="adminUnbanUser(row.student_id)">解封</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+          <!-- Admin: Announcements -->
+          <div v-show="activeMenu === 'admin_announcements'">
+            <div style="display:flex; justify-content:space-between; margin-bottom: 24px;">
+              <div>
+                <h1 class="page-title">公告管理</h1>
+                <p class="page-subtitle">发布和删除系统公告。</p>
+              </div>
+              <el-button type="primary" @click="openAnnDialog">发布新公告</el-button>
+            </div>
+            <div class="saas-card">
+              <el-table :data="announcements" v-loading="adminLoading" style="width: 100%">
+                <el-table-column prop="id" label="ID" width="60"></el-table-column>
+                <el-table-column prop="title" label="标题"></el-table-column>
+                <el-table-column prop="content" label="内容" show-overflow-tooltip></el-table-column>
+                <el-table-column prop="created_at" label="发布时间" width="120"></el-table-column>
+                <el-table-column label="操作" width="100">
+                  <template #default="{row}">
+                    <el-button size="small" type="danger" link @click="deleteAnnouncement(row.id)">删除</el-button>
+                  </template>
+                </el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+          <!-- Admin: Logs -->
+          <div v-show="activeMenu === 'admin_logs'">
+            <h1 class="page-title">操作日志审计</h1>
+            <p class="page-subtitle">查看系统内的积分变动、登录和管理员操作记录。</p>
+            <div class="saas-card">
+              <el-table :data="adminLogs" v-loading="adminLoading" style="width: 100%">
+                <el-table-column prop="log_id" label="ID" width="60"></el-table-column>
+                <el-table-column prop="log_type" label="类型" width="100">
+                  <template #default="{row}">
+                    <el-tag size="small">{{row.log_type}}</el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column prop="operator" label="操作人" width="100"></el-table-column>
+                <el-table-column prop="content" label="日志内容"></el-table-column>
+                <el-table-column prop="created_at" label="发生时间" width="180"></el-table-column>
+              </el-table>
+            </div>
+          </div>
+
+        </div>
+      </main>
+    </div>
+
+    <!-- Seat Drawer -->
+    <el-dialog v-model="drawerVisible" :title="drawerTitle" width="700px" style="background: var(--bg-surface);">
+      <div v-loading="seatsLoading">
+        <div style="margin-bottom: 16px; font-size: 14px; color: var(--text-secondary)">
+          空闲座位: <span style="color: #22c55e; font-weight: 600;">{{ seats.filter(s => s.status === 'available').length }}</span> / 总座位: {{ seats.length }}
+        </div>
+        <el-table :data="seats" style="width: 100%">
+          <el-table-column prop="seat_no" label="座位号" width="90" ></el-table-column>
+          <el-table-column label="电源" width="70">
+            <template #default="{ row }">
+              <span v-if="row.has_power" style="color:#eab308">⚡️</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="80">
+            <template #default="{ row }">
+              <span :style="{color: row.status==='available'?'#22c55e':row.status==='maintenance'?'#f97316':'#ef4444', fontSize:'13px'}">
+                {{ row.status === 'available' ? '空闲' : row.status === 'reserved' ? '已被预约' : row.status === 'maintenance' ? '维修中' : '使用中' }}
+              </span>
+            </template>
+          </el-table-column>
+          <el-table-column label="预约信息" width="160" v-if="isAdmin">
+            <template #default="{ row }">
+              <div v-if="row.reservations && row.reservations.length > 0">
+                <el-popover placement="top" :width="280" trigger="hover">
+                  <template #reference>
+                    <el-tag size="small" type="primary" style="cursor: pointer;">共有 {{row.reservations.length}} 条预约</el-tag>
+                  </template>
+                  <div style="font-size: 12px; line-height: 1.4; max-height: 250px; overflow-y: auto;">
+                    <div v-for="(r, idx) in row.reservations" :key="idx" style="margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 6px;">
+                      <div style="font-weight: 600; color: var(--text-primary);">{{r.student_name}} <span style="font-weight:400; color:var(--text-secondary)">({{r.student_id}})</span></div>
+                      <div style="color:var(--text-secondary); margin-top:2px;">{{r.reserve_date}} {{formatTime(r.start_time)}} - {{formatTime(r.end_time)}}</div>
+                    </div>
+                  </div>
+                </el-popover>
+              </div>
+              <span v-else style="color:#a1a1aa; font-size:11px;">无预约</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作">
+            <template #default="{ row }">
+              <el-button v-if="!isAdmin && row.status==='available'" size="small" color="#ededed" style="color:#000; border:none;" @click="openReserveDialog(row)">预约</el-button>
+              <el-button v-if="isAdmin && row.status!=='maintenance'" size="small" type="warning" link @click="adminUpdateSeat(row.seat_id, 'maintenance', row.room_id)">设为维修</el-button>
+              <el-button v-if="isAdmin && row.status==='maintenance'" size="small" type="success" link @click="adminUpdateSeat(row.seat_id, 'available', row.room_id)">设为可用</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-dialog>
+
+    <!-- Reserve Dialog -->
+    <el-dialog v-model="reserveDialogVisible" title="确认预约" width="400px" style="background: var(--bg-surface); border-radius: 12px;">
+      <el-form :model="reserveForm" label-position="top" @submit.prevent>
+        
+        <el-form-item label="预约日期">
+          <el-date-picker v-model="reserveForm.reserve_date" type="date" placeholder="选择日期" value-format="YYYY-MM-DD" :disabled-date="disabledDate" style="width: 100%"></el-date-picker>
+        </el-form-item>
+        <div style="display: flex; gap: 16px;">
+          <el-form-item label="开始时间" style="flex:1">
+            <el-time-select v-model="reserveForm.start_time" start="08:00" step="00:15" end="22:00" placeholder="开始时间" style="width: 100%"></el-time-select>
+          </el-form-item>
+          <el-form-item label="结束时间" style="flex:1">
+            <el-time-select v-model="reserveForm.end_time" start="08:00" step="00:15" end="22:00" :min-time="reserveForm.start_time" placeholder="结束时间" style="width: 100%"></el-time-select>
+          </el-form-item>
+        </div>
+      </el-form>
+      <template #footer>
+        <el-button @click="reserveDialogVisible = false" style="background:transparent; border-color:var(--border-color); color:var(--text-primary)">取消</el-button>
+        <el-button color="#ededed" style="color:#000; border:none;" @click="submitReserve" :loading="reserveLoading">确认提交</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- Exchange Dialog -->
+    <el-dialog v-model="exchangeDialogVisible" title="确认兑换" width="400px" style="background: var(--bg-surface); border-radius: 12px;">
+      <div v-if="targetProduct" style="margin-bottom: 24px;">
+        <div style="font-weight: 600; font-size: 16px;">{{ targetProduct.name }}</div>
+        <div style="color: var(--text-secondary); font-size: 14px; margin-top: 4px;">所需积分: {{ targetProduct.points_required }} 分</div>
+      </div>
+      <el-form :model="exchangeForm" label-position="top" @submit.prevent>
+        
+      </el-form>
+      <template #footer>
+        <el-button @click="exchangeDialogVisible = false" style="background:transparent; border-color:var(--border-color); color:var(--text-primary)">取消</el-button>
+        <el-button color="#ededed" style="color:#000; border:none;" @click="submitExchange" :loading="exchangeLoading">立即兑换</el-button>
+      </template>
+    </el-dialog>
+
+  </div><!-- end layout -->
+
+  <!-- ========== Admin Panel Pages (shown inside layout .content-area via v-show) ========== -->
+  <!-- NOTE: These are injected via Vue inside the already-rendered content-area. 
+       Since we're inside v-if="isLoggedIn", we add them via template in the script as dynamic content. -->
+
+  </div><!-- end app -->
+
+
+  <script>
+    const { createApp, ref, computed, onMounted, watch, nextTick } = Vue;
+    const { ElMessage } = ElementPlus;
+    // API 基础地址：因为现在统一由 FastAPI 托管 index.html，所以直接用空字符串即可，
+    // 所有的接口和静态文件都会请求当前域名（localhost:8000）
+    // 修改为后端服务地址
+    const API_BASE = 'http://127.0.0.1:8000';
+    const STUDENT_ID_RE = /^202\d{9}$/;
+
+    createApp({
+      setup() {
+        // ================== Auth State ==================
+        const token = ref(localStorage.getItem('token') || '');
+        const currentUser = ref(JSON.parse(localStorage.getItem('user') || 'null'));
+        const isLoggedIn = computed(() => !!token.value);
+        const isAdmin = computed(() => currentUser.value && currentUser.value.role && currentUser.value.role.startsWith('admin'));
+        
+        const loginTab = ref('student');
+        const loginLoading = ref(false);
+        const loginForm = ref({ student_id: '', password: '' });
+        const regForm = ref({ student_id: '', name: '', phone: '', password: '' });
+        const adminForm = ref({ username: '', password: '' });
+        const resetForm = ref({ student_id: '', phone: '', new_password: '' });
+
+        const setLoginSession = (data) => {
+          token.value = data.token;
+          currentUser.value = data;
+          localStorage.setItem('token', data.token);
+          localStorage.setItem('user', JSON.stringify(data));
+          activeMenu.value = isAdmin.value ? 'dashboard' : 'spaces';
+          if (isAdmin.value) { loadAnnouncements(); } else { fetchAnnouncements(); }
+        };
+
+        const doStudentLogin = async () => {
+          if (!loginForm.value.student_id || !loginForm.value.password) return ElMessage.warning('请填写完整');
+          loginLoading.value = true;
+          try {
+            const r = await fetch(API_BASE + '/api/auth/login', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(loginForm.value)
+            });
+            const res = await r.json();
+            if (res.code === 200) { ElMessage.success('登录成功'); setLoginSession(res.data); }
+            else { ElMessage.error(res.detail || res.msg || '登录失败'); }
+          } finally { loginLoading.value = false; }
+        };
+
+        const doAdminLogin = async () => {
+          if (!adminForm.value.username || !adminForm.value.password) return ElMessage.warning('请填写完整');
+          loginLoading.value = true;
+          try {
+            const r = await fetch(API_BASE + '/api/auth/admin/login', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(adminForm.value)
+            });
+            const res = await r.json();
+            if (res.code === 200) { ElMessage.success('管理员登录成功'); setLoginSession(res.data); }
+            else { ElMessage.error(res.detail || res.msg || '登录失败'); }
+          } finally { loginLoading.value = false; }
+        };
+
+        const doRegister = async () => {
+          if (!regForm.value.student_id || !regForm.value.name || !regForm.value.phone || !regForm.value.password) return ElMessage.warning('请填写完整');
+          loginLoading.value = true;
+          try {
+            const r = await fetch(API_BASE + '/api/auth/register', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(regForm.value)
+            });
+            const res = await r.json();
+            if (res.code === 200) { ElMessage.success('注册成功，请登录'); loginTab.value = 'student'; loginForm.value.student_id = regForm.value.student_id; }
+            else { ElMessage.error(res.detail || res.msg || '注册失败'); }
+          } finally { loginLoading.value = false; }
+        };
+
+        const doResetPwd = async () => {
+          if (!resetForm.value.student_id || !resetForm.value.phone || !resetForm.value.new_password) return ElMessage.warning('请填写完整');
+          loginLoading.value = true;
+          try {
+            const r = await fetch(API_BASE + '/api/auth/reset-password', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(resetForm.value)
+            });
+            const res = await r.json();
+            if (res.code === 200) { ElMessage.success('密码已重置，请登录'); loginTab.value = 'student'; }
+            else { ElMessage.error(res.detail || res.msg || '验证失败'); }
+          } finally { loginLoading.value = false; }
+        };
+
+        const doLogout = () => {
+          token.value = '';
+          currentUser.value = null;
+          localStorage.removeItem('token');
+          localStorage.removeItem('user');
+          activeMenu.value = 'spaces';
+        };
+
+        // ================== Admin State & Methods ==================
+        const adminLoading = ref(false);
+        const adminRooms = ref([]);
+        const adminTickets = ref([]);
+        const adminUsers = ref([]);
+        const adminLogs = ref([]);
+        const announcements = ref([]);
+
+        const authHeaders = () => ({ 'Authorization': 'Bearer ' + token.value, 'Content-Type': 'application/json' });
+        const apiFetch = async (url, options = {}) => {
+          if (!options.headers) options.headers = {};
+          options.headers['Authorization'] = 'Bearer ' + token.value;
+          const r = await fetch(url, options);
+          if (r.status === 401 || r.status === 403) { doLogout(); ElMessage.error('会话已过期，请重新登录'); throw new Error('Unauthorized'); }
+          return r;
+        };
+
+        const loadAnnouncements = async () => {
+          const r = await apiFetch(API_BASE + '/api/announcements');
+          const res = await r.json();
+          if (res.code === 200) announcements.value = res.data;
+        };
+        const fetchAnnouncements = loadAnnouncements;
+
+        const loadAdminRooms = async () => {
+          adminLoading.value = true;
+          const r = await apiFetch(API_BASE + '/api/admin/rooms');
+          const res = await r.json();
+          adminLoading.value = false;
+          if (res.code === 200) adminRooms.value = res.data;
+        };
+
+        const loadAdminTickets = async () => {
+          adminLoading.value = true;
+          const r = await apiFetch(API_BASE + '/api/admin/tickets');
+          const res = await r.json();
+          adminLoading.value = false;
+          if (res.code === 200) adminTickets.value = res.data;
+        };
+
+        const loadAdminUsers = async () => {
+          adminLoading.value = true;
+          const r = await apiFetch(API_BASE + '/api/admin/students');
+          const res = await r.json();
+          adminLoading.value = false;
+          if (res.code === 200) adminUsers.value = res.data;
+        };
+
+        const loadAdminLogs = async () => {
+          adminLoading.value = true;
+          const r = await apiFetch(API_BASE + '/api/admin/logs');
+          const res = await r.json();
+          adminLoading.value = false;
+          if (res.code === 200) adminLogs.value = res.data;
+        };
+
+        const openAddRoomDialog = () => {
+          const name = prompt('请输入新阅览室名称：', '新阅览室');
+          if (!name) return;
+          const loc = prompt('请输入位置：', '某楼某层');
+          if (!loc) return;
+          apiFetch(API_BASE + '/api/admin/rooms', {
+            method: 'POST', headers: authHeaders(),
+            body: JSON.stringify({ room_name: name, location: loc, open_time: '08:00:00', close_time: '22:00:00' })
+          }).then(r => r.json()).then(res => {
+            if (res.code === 200) { ElMessage.success('添加成功'); loadAdminRooms(); fetchRooms(); }
+            else ElMessage.error(res.detail || '失败');
+          });
+        };
+
+        const deleteRoom = async (room_id) => {
+          if(!confirm('警告：删除阅览室将同时删除其下所有座位和相关预约、报修记录！确认删除吗？')) return;
+          const r = await apiFetch(`${API_BASE}/api/admin/rooms/${room_id}`, { method: 'DELETE', headers: authHeaders() });
+          const res = await r.json();
+          if(res.code===200) { ElMessage.success('删除成功'); loadAdminRooms(); fetchRooms(); }
+          else ElMessage.error(res.msg || res.detail || '删除失败');
+        };
+
+        const formatTime = (t) => {
+          if (!t) return '';
+          if (t.toString().startsWith('PT')) {
+            let h = 0, m = 0;
+            const hMatch = t.match(/(\d+)H/);
+            if (hMatch) h = parseInt(hMatch[1]);
+            const mMatch = t.match(/(\d+)M/);
+            if (mMatch) m = parseInt(mMatch[1]);
+            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+          }
+          return t;
+        };
+
+        const disabledDate = (time) => {
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          const tomorrow = new Date(today);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          return time.getTime() < today.getTime() || time.getTime() > tomorrow.getTime();
+        };
+
+        const openAdminSeatDrawer = (room) => {
+          drawerTitle.value = `管理 ${room.room_name} 的座位`;
+          drawerVisible.value = true;
+          seatsLoading.value = true;
+          apiFetch(API_BASE + `/api/seats/${room.room_id}`).then(r => r.json()).then(res => {
+            seatsLoading.value = false;
+            if(res.code===200) {
+                // Attach room ID to seats for easy re-fetching
+                seats.value = res.data.map(s => ({ ...s, room_id: room.room_id }));
+            }
+          });
+        };
+
+        const adminUpdateSeat = async (seat_id, status, room_id) => {
+          const r = await apiFetch(API_BASE + `/api/admin/seats/${seat_id}`, {
+            method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ status })
+          });
+          const res = await r.json();
+          if (res.code === 200) {
+            ElMessage.success('座位状态更新成功');
+            // Refresh seats drawer
+            seatsLoading.value = true;
+            const r2 = await apiFetch(API_BASE + `/api/seats/${room_id}`);
+            const res2 = await r2.json();
+            seatsLoading.value = false;
+            if (res2.code === 200) seats.value = res2.data.map(s => ({ ...s, room_id }));
+            loadAdminRooms(); // refresh total rooms stats
+          } else {
+            ElMessage.error(res.msg || res.detail || '更新失败');
+          }
+        };
+
+        const updateTicketStatus = async (ticket_id, action) => {
+          const r = await apiFetch(API_BASE + `/api/admin/tickets/${ticket_id}`, {
+            method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ action })
+          });
+          const res = await r.json();
+          if(res.code===200) { ElMessage.success('更新成功'); loadAdminTickets(); }
+        };
+
+        const adminBanUser = async (user) => {
+          const reason = prompt('请输入拉黑原因：', '违反自习室规定');
+          if (reason === null) return;
+          const r = await apiFetch(API_BASE + `/api/admin/students/${user.student_id}/blacklist`, {
+            method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ action: 'ban', reason })
+          });
+          const res = await r.json();
+          if(res.code===200) { ElMessage.success('已拉黑'); loadAdminUsers(); }
+        };
+
+        const adminUnbanUser = async (student_id) => {
+          const r = await apiFetch(API_BASE + `/api/admin/students/${student_id}/blacklist`, {
+            method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ action: 'unban' })
+          });
+          const res = await r.json();
+          if(res.code===200) { ElMessage.success('已解封'); loadAdminUsers(); }
+        };
+
+        const openCreditDialog = (user) => {
+          const deltaStr = prompt(`为学生 ${user.name} 调整信用分 (输入正负数字)：`, '-5');
+          if(!deltaStr) return;
+          const delta = parseInt(deltaStr);
+          if(isNaN(delta)) return ElMessage.error('输入无效');
+          const reason = prompt('调整原因：', '管理员手动调整');
+          apiFetch(API_BASE + `/api/admin/students/${user.student_id}/credit`, {
+            method: 'PATCH', headers: authHeaders(), body: JSON.stringify({ delta, reason })
+          }).then(r=>r.json()).then(res=>{
+             if(res.code===200) { ElMessage.success('调整成功'); loadAdminUsers(); }
+          });
+        };
+
+        const openAnnDialog = () => {
+          const title = prompt('公告标题：');
+          if(!title) return;
+          const content = prompt('公告内容：');
+          if(!content) return;
+          apiFetch(API_BASE + '/api/admin/announcements', {
+            method: 'POST', headers: authHeaders(), body: JSON.stringify({ title, content })
+          }).then(r=>r.json()).then(res=>{
+             if(res.code===200) { ElMessage.success('发布成功'); loadAnnouncements(); }
+          });
+        };
+
+        const deleteAnnouncement = async (id) => {
+          if(!confirm('确认删除公告？')) return;
+          const r = await apiFetch(API_BASE + `/api/admin/announcements/${id}`, { method: 'DELETE', headers: authHeaders() });
+          const res = await r.json();
+          if(res.code===200) { ElMessage.success('已删除'); loadAnnouncements(); }
+        };
+
+
+        const activeMenu = ref('spaces'); // 改为默认显示自习预约
+        const menuTitle = computed(() => {
+          const m = { dashboard: '数据大屏', spaces: '自习预约', my_reservations: '我的预约', rules: '规则说明', store: '积分商城', repairs: '设备报修', profile: '个人中心' };
+          return m[activeMenu.value];
+        });
+
+        // ================== Clock ==================
+        const currentTime = ref('');
+        setInterval(() => {
+          currentTime.value = new Date().toLocaleString('zh-CN', { hour12: false });
+        }, 1000);
+
+        // ================== Dashboard ==================
+        let chartOcc, chartTrd;
+        const initCharts = () => {
+          if (!document.getElementById('chartOccupancy')) return;
+          chartOcc = echarts.init(document.getElementById('chartOccupancy'));
+          chartTrd = echarts.init(document.getElementById('chartTrend'));
+          
+          apiFetch(`${API_BASE}/api/dashboard/stats?t=${Date.now()}`).then(r=>r.json()).then(res => {
+            if(res.code === 200) {
+              const occData = res.data.occupancy.map(item => ({ value: item.occupancy_rate, name: item.room_name }));
+              chartOcc.setOption({
+                tooltip: { trigger: 'item' },
+                series: [{
+                  type: 'pie', radius: ['40%', '70%'], itemStyle: { borderRadius: 4, borderColor: '#000', borderWidth: 2 },
+                  label: { color: '#ededed' },
+                  data: occData
+                }]
+              });
+
+              const dates = res.data.trend.map(i => i.date);
+              const vals = res.data.trend.map(i => i.total_violations);
+              chartTrd.setOption({
+                tooltip: { trigger: 'axis' },
+                xAxis: { type: 'category', data: dates, axisLabel: { color: '#a1a1aa' } },
+                yAxis: { type: 'value', splitLine: { lineStyle: { color: '#27272a' } }, axisLabel: { color: '#a1a1aa' } },
+                series: [{ data: vals, type: 'line', smooth: true, itemStyle: { color: '#ededed' }, areaStyle: { color: 'rgba(237,237,237,0.1)' } }]
+              });
+            }
+          });
+        };
+
+        // Watch menu change to init charts when visible
+        watch(activeMenu, (val) => {
+          if (val === 'dashboard') {
+            nextTick(() => { if(!chartOcc) initCharts(); else { chartOcc.resize(); chartTrd.resize(); }});
+          }
+          if (val === 'profile' && currentUser.value && currentUser.value.student_id) {
+            fetchProfile();
+          }
+          if (val === 'my_reservations' && currentUser.value && currentUser.value.student_id) {
+            fetchMyReservations();
+          }
+        });
+
+        // ================== Spaces ==================
+        const rooms = ref([]);
+        const roomsLoading = ref(false);
+        const fetchRooms = () => {
+          roomsLoading.value = true;
+          apiFetch(`${API_BASE}/api/rooms?t=${Date.now()}`).then(r=>r.json()).then(res => {
+            if(res.code === 200) rooms.value = res.data;
+          }).finally(() => { roomsLoading.value = false; });
+        };
+
+        const drawerVisible = ref(false);
+        const drawerTitle = ref("");
+        const seats = ref([]);
+        const seatsLoading = ref(false);
+        const openSeats = async (room) => {
+          drawerTitle.value = `${room.room_name} - 座位一览`;
+          drawerVisible.value = true;
+          seatsLoading.value = true;
+          seats.value = [];
+          try {
+            const r = await apiFetch(`${API_BASE}/api/seats/${room.room_id}?t=${Date.now()}`);
+            const j = await r.json();
+            seats.value = j.data || [];
+          } finally { seatsLoading.value = false; }
+        };
+
+        const reserveDialogVisible = ref(false);
+        const reserveForm = ref({ student_id: '', seat_id: null, reserve_date: '', start_time: '', end_time: '' });
+        const reserveLoading = ref(false);
+        const openReserveDialog = (seat) => {
+          reserveForm.value.seat_id = seat.seat_id;
+          reserveForm.value.student_id = '';
+          
+          const now = new Date();
+          const y = now.getFullYear(), m = String(now.getMonth()+1).padStart(2,'0'), d = String(now.getDate()).padStart(2,'0');
+          reserveForm.value.reserve_date = `${y}-${m}-${d}`;
+          reserveForm.value.start_time = '08:00';
+          reserveForm.value.end_time = '10:00';
+          
+          reserveDialogVisible.value = true;
+        };
+        const submitReserve = async () => {
+          reserveForm.value.student_id = currentUser.value.student_id;
+          if (!reserveForm.value.reserve_date || !reserveForm.value.start_time || !reserveForm.value.end_time) {
+            return ElMessage.error("请完整填写预约时间");
+          }
+          if (reserveForm.value.start_time >= reserveForm.value.end_time) {
+            return ElMessage.error("结束时间必须晚于开始时间");
+          }
+          reserveLoading.value = true;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/reserve`, {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(reserveForm.value)
+            });
+            const j = await r.json();
+            if (j.code === 200) { ElMessage.success(j.msg); reserveDialogVisible.value = false; fetchRooms(); }
+            else ElMessage.error(j.msg);
+          } finally { reserveLoading.value = false; }
+        };
+
+        // ================== Store ==================
+        const products = ref([]);
+        const storeLoading = ref(false);
+        const fetchProducts = () => {
+          storeLoading.value = true;
+          apiFetch(`${API_BASE}/api/products?t=${Date.now()}`).then(r=>r.json()).then(res => {
+            if (res.code === 200) products.value = res.data;
+          }).finally(() => { storeLoading.value = false; });
+        };
+
+        const exchangeDialogVisible = ref(false);
+        const exchangeForm = ref({ student_id: '', product_id: null });
+        const targetProduct = ref(null);
+        const exchangeLoading = ref(false);
+        const openExchange = (p) => {
+          targetProduct.value = p;
+          exchangeForm.value.product_id = p.product_id;
+          exchangeForm.value.student_id = '';
+          exchangeDialogVisible.value = true;
+        };
+        const submitExchange = async () => {
+          exchangeForm.value.student_id = currentUser.value.student_id;
+          exchangeLoading.value = true;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/exchange`, {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(exchangeForm.value)
+            });
+            const j = await r.json();
+            if (j.code === 200) { ElMessage.success("兑换成功！已发送至学校邮箱，记得及时领取。"); exchangeDialogVisible.value = false; fetchProducts(); }
+            else ElMessage.error(j.msg || j.detail?.msg || "兑换失败");
+          } finally { exchangeLoading.value = false; }
+        };
+
+        // ================== Repairs ==================
+        const repairs = ref([]);
+        const repairsLoading = ref(false);
+        const repairForm = ref({ student_id: '', room_id: '', seat_id: null, description: '' });
+        const repairSeats = ref([]);
+        const handleRepairRoomChange = async (roomId) => {
+          repairForm.value.seat_id = null;
+          repairSeats.value = [];
+          if (!roomId) return;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/seats/${roomId}`);
+            const j = await r.json();
+            if (j.code === 200) {
+              repairSeats.value = j.data || [];
+            }
+          } catch(e) {
+            console.error(e);
+          }
+        };
+        const fetchRepairs = async () => {
+          repairsLoading.value = true;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/repairs`);
+            const j = await r.json();
+            repairs.value = j.data || [];
+          } finally { repairsLoading.value = false; }
+        };
+        const submitRepair = async () => {
+          repairForm.value.student_id = currentUser.value.student_id;
+          if (!repairForm.value.room_id || !repairForm.value.description) return ElMessage.error("请完整填写表单");
+          try {
+            const r = await apiFetch(`${API_BASE}/api/repairs`, {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({
+                student_id: repairForm.value.student_id,
+                room_id: parseInt(repairForm.value.room_id),
+                seat_id: repairForm.value.seat_id,
+                description: repairForm.value.description
+              })
+            });
+            const j = await r.json();
+            if (j.code === 200) { ElMessage.success("工单已提交"); fetchRepairs(); repairForm.value.description = ''; }
+            else ElMessage.error(j.msg);
+          } catch(e) {}
+        };
+
+        // ================== Profile ==================
+        
+        const profile = ref(null);
+        const profileLoading = ref(false);
+        const fetchProfile = async () => {
+          if (!currentUser.value || !currentUser.value.student_id) return;
+          const sid = currentUser.value.student_id;
+          profileLoading.value = true;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/students/${sid}`);
+            const j = await r.json();
+            if (j.code === 200) profile.value = j.data;
+            else { profile.value = null; ElMessage.error(j.msg || "未查询到信息"); }
+          } finally { profileLoading.value = false; }
+        };
+
+        // ================== My Reservations ==================
+        
+        const myReservations = ref([]);
+        const resLoading = ref(false);
+        const hasSearchedRes = ref(false);
+
+        const fetchMyReservations = async () => {
+          if (!currentUser.value || !currentUser.value.student_id) return;
+          const sid = currentUser.value.student_id;
+          resLoading.value = true;
+          hasSearchedRes.value = true;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/reservations/${sid}`);
+            const j = await r.json();
+            if (j.code === 200) myReservations.value = j.data;
+            else { myReservations.value = []; ElMessage.error(j.msg); }
+          } finally { resLoading.value = false; }
+        };
+
+        const handleResAction = async (id, action) => {
+          resLoading.value = true;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/reservations/${id}/action`, {
+              method: 'POST', headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify({ student_id: currentUser.value.student_id, action })
+            });
+            const j = await r.json();
+            if (j.code === 200) { ElMessage.success("操作成功"); fetchMyReservations(); fetchRooms(); }
+            else ElMessage.error(j.msg);
+          } finally { resLoading.value = false; }
+        };
+
+        onMounted(() => {
+          if (isLoggedIn.value) {
+            if (isAdmin.value) loadAnnouncements();
+            else fetchAnnouncements();
+          }
+          if (activeMenu.value === 'dashboard') initCharts();
+          fetchRooms();
+          fetchProducts();
+          fetchRepairs();
+          
+          window.addEventListener('resize', () => {
+            if(chartOcc) chartOcc.resize();
+            if(chartTrd) chartTrd.resize();
+          });
+        });
+
+        /**
+         * 导出每日统计数据为 CSV。
+         * 利用浏览器原生 window.location.href 触发下载，
+         * 后端 StreamingResponse 会指导浏览器弹出下载对话框。
+         */
+        const exportStats = () => {
+          window.location.href = `${API_BASE}/api/export/stats`;
+        };
+
+        return {
+          isLoggedIn, isAdmin, currentUser, loginTab, loginLoading, loginForm, regForm, adminForm, resetForm,
+          doStudentLogin, doAdminLogin, doRegister, doResetPwd, doLogout,
+          adminLoading, adminRooms, adminTickets, adminUsers, adminLogs, announcements,
+          loadAdminRooms, loadAdminTickets, loadAdminUsers, loadAdminLogs, loadAnnouncements,
+          openAddRoomDialog, deleteRoom, openAdminSeatDrawer, adminUpdateSeat, updateTicketStatus, adminBanUser, adminUnbanUser, openCreditDialog, openAnnDialog, deleteAnnouncement,
+          formatTime, disabledDate,
+
+          API_BASE,
+          activeMenu, menuTitle,
+          rooms, roomsLoading, openSeats,
+          drawerVisible, drawerTitle, seats, seatsLoading,
+          reserveDialogVisible, reserveForm, reserveLoading, openReserveDialog, submitReserve,
+          products, storeLoading, exchangeDialogVisible, exchangeForm, targetProduct, exchangeLoading, openExchange, submitExchange,
+          repairs, repairsLoading, repairForm, repairSeats, handleRepairRoomChange, submitRepair,
+          profile, profileLoading, fetchProfile,
+          currentTime,
+          myReservations, resLoading, hasSearchedRes, fetchMyReservations, handleResAction,
+          exportStats
+        };
+      }
+    }).use(ElementPlus).mount('#app');
+  </script>
+</body>
+</html>
