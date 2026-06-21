@@ -1461,7 +1461,11 @@
     <!-- Points Logs Dialog -->
     <el-dialog v-model="pointsLogsVisible" title="积分明细 (近15天)" width="500px" style="background: var(--bg-surface); border-radius: 12px;">
       <el-table :data="pointsLogs" v-loading="pointsLogsLoading" style="width: 100%" size="small">
-        <el-table-column prop="created_at" label="时间" width="160"></el-table-column>
+        <el-table-column label="时间" width="160">
+          <template #default="{row}">
+            {{ row.created_at ? row.created_at.replace('T', ' ') : '' }}
+          </template>
+        </el-table-column>
         <el-table-column label="变动" width="80">
           <template #default="{row}">
             <span :style="{color: row.points_change > 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold'}">
