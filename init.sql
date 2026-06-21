@@ -1,166 +1,140 @@
--- 南信大自习空间管理子系统 v2.0 - 完整数据库建库脚本
--- =========================================================
+-- 南信大自习室管理系统 -- 建库脚本
 
--- 开启事件调度器（用于定时任务）
 SET GLOBAL event_scheduler = ON;
 
--- 如果数据库已存在，先删除重建
 DROP DATABASE IF EXISTS lingxi_db;
-
 CREATE DATABASE lingxi_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 USE lingxi_db;
 
--- =========================================================
--- 1. 表结构创建
--- =========================================================
+-- 表
 
--- 1.1 学生表 (students)
+-- 学生表
 CREATE TABLE students (
-    student_id   VARCHAR(20) PRIMARY KEY,
-    name         VARCHAR(50) NOT NULL,
-    email        VARCHAR(100) UNIQUE,
-    phone        VARCHAR(20) UNIQUE,
-    password_hash VARCHAR(255) NOT NULL DEFAULT '', -- bcrypt 哈希密码
-    credit_score INT NOT NULL DEFAULT 100,
-    study_points INT NOT NULL DEFAULT 0,            -- 学习积分（用于商城兑换）
-    created_at   DATETIME DEFAULT CURRENT_TIMESTAMP
+    student_id    VARCHAR(20) PRIMARY KEY,
+    name          VARCHAR(50) NOT NULL,
+    email         VARCHAR(100) UNIQUE,
+    phone         VARCHAR(20) UNIQUE,
+    password_hash VARCHAR(255) NOT NULL DEFAULT '',
+    credit_score  INT NOT NULL DEFAULT 100,
+    study_points  INT NOT NULL DEFAULT 0,  -- 学习积分，用于积分商城兑换
+    created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 1.2 阅览室表 (rooms)
+-- 自习室大全
 CREATE TABLE rooms (
-    room_id INT AUTO_INCREMENT PRIMARY KEY,
+    room_id   INT AUTO_INCREMENT PRIMARY KEY,
     room_name VARCHAR(100) NOT NULL UNIQUE,
-    location VARCHAR(200),
-    open_time TIME NOT NULL DEFAULT '08:00:00',
+    location  VARCHAR(200),
+    open_time  TIME NOT NULL DEFAULT '08:00:00',
     close_time TIME NOT NULL DEFAULT '22:00:00',
-    status TINYINT NOT NULL DEFAULT 1, -- 1: 开放, 0: 关闭
+    status     TINYINT NOT NULL DEFAULT 1, -- 1 开放，0 关闭
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 1.3 座位表 (seats)
+-- 座位坑位表
+-- status 仅用于标记维修状态（maintenance），实际占用/空闲由 reservations 动态计算
 CREATE TABLE seats (
-    seat_id INT AUTO_INCREMENT PRIMARY KEY,
-    room_id INT NOT NULL,
-    seat_no VARCHAR(20) NOT NULL,
+    seat_id  INT AUTO_INCREMENT PRIMARY KEY,
+    room_id  INT NOT NULL,
+    seat_no  VARCHAR(20) NOT NULL,
     has_power TINYINT(1) DEFAULT 0,
-    status ENUM(
-        'available',
-        'reserved',
-        'occupied',
-        'maintenance'
-    ) DEFAULT 'available',
+    tags      VARCHAR(100) DEFAULT NULL,
+    status    ENUM('available', 'reserved', 'occupied', 'maintenance') DEFAULT 'available',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (room_id) REFERENCES rooms (room_id) ON DELETE CASCADE,
     UNIQUE KEY uk_room_seat (room_id, seat_no)
 );
 
--- 1.4 预约记录表 (reservations)
+-- 大家的预约和抢座历史，核心表
 CREATE TABLE reservations (
     reservation_id INT AUTO_INCREMENT PRIMARY KEY,
-    student_id VARCHAR(20) NOT NULL,
-    seat_id INT NOT NULL,
-    reserve_date DATE NOT NULL,
-    start_time TIME NOT NULL,
-    end_time TIME NOT NULL,
-    status ENUM(
-        'pending',
-        'active',
-        'away',
-        'completed',
-        'cancelled',
-        'violated'
-    ) DEFAULT 'pending',
-    checkin_time DATETIME,
-    checkout_time DATETIME,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    student_id     VARCHAR(20) NOT NULL,
+    seat_id        INT NOT NULL,
+    reserve_date   DATE NOT NULL,
+    start_time     TIME NOT NULL,
+    end_time       TIME NOT NULL,
+    is_looking_for_buddy TINYINT(1) DEFAULT 0,
+    buddy_tags     VARCHAR(100) DEFAULT NULL,
+    status ENUM('pending', 'active', 'away', 'completed', 'cancelled', 'violated') DEFAULT 'pending',
+    checkin_time   DATETIME,
+    checkout_time  DATETIME,
+    last_focus_time DATETIME DEFAULT NULL,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE ON UPDATE CASCADE,
-    FOREIGN KEY (seat_id) REFERENCES seats (seat_id) ON DELETE CASCADE
+    FOREIGN KEY (seat_id) REFERENCES seats (seat_id) ON DELETE CASCADE,
+    INDEX idx_res_date_time (reserve_date, start_time, end_time),
+    INDEX idx_res_status (status)
 );
 
--- 1.5 违约记录表 (violation_logs)
+-- 谁鸽了、谁跑路了，全记这本黑账上
 CREATE TABLE violation_logs (
-    log_id INT AUTO_INCREMENT PRIMARY KEY,
-    student_id VARCHAR(20) NOT NULL,
+    log_id         INT AUTO_INCREMENT PRIMARY KEY,
+    student_id     VARCHAR(20) NOT NULL,
     reservation_id INT,
-    violation_type ENUM(
-        'no_show',
-        'late',
-        'leave_early',
-        'away_overtime',
-        'noise',
-        'other'
-    ) NOT NULL,
-    description TEXT,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    violation_type ENUM('no_show', 'late', 'leave_early', 'away_overtime', 'noise', 'other') NOT NULL,
+    description    TEXT,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (reservation_id) REFERENCES reservations (reservation_id) ON DELETE SET NULL
 );
 
--- 1.6 信用变动流水表 (credit_logs)
+-- 信用分流水，扣分加分全看这个
 CREATE TABLE credit_logs (
-    log_id INT AUTO_INCREMENT PRIMARY KEY,
+    log_id     INT AUTO_INCREMENT PRIMARY KEY,
     student_id VARCHAR(20) NOT NULL,
-    score_change INT NOT NULL, -- 正数增加，负数扣除
-    reason VARCHAR(255) NOT NULL,
+    score_change INT NOT NULL, -- 正数加分，负数扣分
+    reason     VARCHAR(255) NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
--- 1.7 黑名单表 (blacklist)
+-- 小黑屋，被关进去的当月不准预约
 CREATE TABLE blacklist (
     blacklist_id INT AUTO_INCREMENT PRIMARY KEY,
-    student_id VARCHAR(20) NOT NULL,
-    reason VARCHAR(255),
-    start_time DATETIME DEFAULT CURRENT_TIMESTAMP,
-    end_time DATETIME,
-    is_active TINYINT(1) DEFAULT 1,
+    student_id   VARCHAR(20) NOT NULL,
+    reason       VARCHAR(255),
+    start_time   DATETIME DEFAULT CURRENT_TIMESTAMP,
+    end_time     DATETIME,
+    is_active    TINYINT(1) DEFAULT 1,
     FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE ON UPDATE CASCADE
 );
 
--- 1.8 积分商城商品表 (products) - NEW
+-- 积分商城：用肝来的积分换咖啡
+-- 这个 version 是给乐观锁防超卖用的，并发抢咖啡全靠它了
 CREATE TABLE products (
-    product_id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(100) NOT NULL,
-    description TEXT,
+    product_id      INT AUTO_INCREMENT PRIMARY KEY,
+    name            VARCHAR(100) NOT NULL,
+    description     TEXT,
     points_required INT NOT NULL,
-    stock INT NOT NULL DEFAULT 0,
-    version INT NOT NULL DEFAULT 0, -- 乐观锁版本号：每次库存变动 +1，用于并发冲突检测
-    image_url VARCHAR(255),
-    status TINYINT NOT NULL DEFAULT 1, -- 1: 上架, 0: 下架
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    stock           INT NOT NULL DEFAULT 0,
+    version         INT NOT NULL DEFAULT 0,
+    image_url       VARCHAR(255),
+    status          TINYINT NOT NULL DEFAULT 1, -- 1 上架，0 下架
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 1.9 积分兑换订单表 (exchange_orders) - NEW
+-- 谁换了什么奖品，订单记录
 CREATE TABLE exchange_orders (
-    order_id INT AUTO_INCREMENT PRIMARY KEY,
-    student_id VARCHAR(20) NOT NULL,
-    product_id INT NOT NULL,
+    order_id       INT AUTO_INCREMENT PRIMARY KEY,
+    student_id     VARCHAR(20) NOT NULL,
+    product_id     INT NOT NULL,
     points_deducted INT NOT NULL,
-    status ENUM(
-        'pending',
-        'completed',
-        'cancelled'
-    ) DEFAULT 'completed',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    status ENUM('pending', 'completed', 'cancelled') DEFAULT 'completed',
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY (product_id) REFERENCES products (product_id) ON DELETE CASCADE
 );
 
--- 1.10 设备报修工单表 (repair_tickets) - NEW
+-- 东西坏了在这报修
 CREATE TABLE repair_tickets (
-    ticket_id INT AUTO_INCREMENT PRIMARY KEY,
+    ticket_id  INT AUTO_INCREMENT PRIMARY KEY,
     student_id VARCHAR(20) NOT NULL,
-    room_id INT NOT NULL,
-    seat_id INT,
+    room_id    INT NOT NULL,
+    seat_id    INT,
     description TEXT NOT NULL,
-    status ENUM(
-        'pending',
-        'processing',
-        'resolved',
-        'closed'
-    ) DEFAULT 'pending',
+    status ENUM('pending', 'processing', 'resolved', 'closed') DEFAULT 'pending',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE ON UPDATE CASCADE,
@@ -168,17 +142,17 @@ CREATE TABLE repair_tickets (
     FOREIGN KEY (seat_id) REFERENCES seats (seat_id) ON DELETE SET NULL
 );
 
--- 1.11 每日自习统计表 (daily_study_stats) - NEW
+-- 每日自习统计表（给折线图用）
 CREATE TABLE daily_study_stats (
-    stat_date DATE PRIMARY KEY,
-    total_reservations INT DEFAULT 0,
+    stat_date              DATE PRIMARY KEY,
+    total_reservations     INT DEFAULT 0,
     completed_reservations INT DEFAULT 0,
-    total_violations INT DEFAULT 0,
-    total_study_hours DECIMAL(10, 2) DEFAULT 0.00,
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    total_violations       INT DEFAULT 0,
+    total_study_hours      DECIMAL(10, 2) DEFAULT 0.00,
+    created_at             DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 1.12 管理员表 (admins) - NEW
+-- 管理员账号表
 CREATE TABLE admins (
     admin_id      INT AUTO_INCREMENT PRIMARY KEY,
     username      VARCHAR(50) UNIQUE NOT NULL,
@@ -188,7 +162,7 @@ CREATE TABLE admins (
     created_at    DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
--- 1.13 系统公告表 (announcements) - NEW
+-- 系统公告表
 CREATE TABLE announcements (
     id         INT AUTO_INCREMENT PRIMARY KEY,
     title      VARCHAR(200) NOT NULL,
@@ -198,23 +172,50 @@ CREATE TABLE announcements (
     FOREIGN KEY (admin_id) REFERENCES admins (admin_id) ON DELETE SET NULL
 );
 
--- 1.14 操作审计日志表 (system_logs) - NEW
+-- 操作审计日志表
 CREATE TABLE system_logs (
     log_id     INT AUTO_INCREMENT PRIMARY KEY,
     log_type   ENUM('credit_change', 'exchange', 'blacklist', 'admin_op', 'login') NOT NULL,
     student_id VARCHAR(20),
-    operator   VARCHAR(50),   -- 操作者（学号或 admin 用户名）
-    content    TEXT NOT NULL, -- 日志内容描述
+    operator   VARCHAR(50),
+    content    TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     INDEX idx_log_type (log_type),
     INDEX idx_log_student (student_id)
 );
 
--- =========================================================
--- 2. 视图 (Views)
--- =========================================================
+-- 自习室留言板/树洞
+CREATE TABLE room_messages (
+    msg_id     INT AUTO_INCREMENT PRIMARY KEY,
+    room_id    INT NOT NULL,
+    student_id VARCHAR(20) NOT NULL,
+    content    TEXT NOT NULL,
+    is_anonymous TINYINT(1) DEFAULT 0,
+    status     TINYINT DEFAULT 1, -- 1 正常，0 隐藏（管理员封禁）
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (room_id) REFERENCES rooms (room_id) ON DELETE CASCADE,
+    FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE
+);
 
--- 2.1 原有视图：实时座位统计
+-- 信用分主动恢复任务表
+CREATE TABLE credit_tasks (
+    task_id    INT AUTO_INCREMENT PRIMARY KEY,
+    student_id VARCHAR(20) NOT NULL,
+    task_type  VARCHAR(50) NOT NULL, -- 如 "清理桌面", "志愿服务"
+    description TEXT NOT NULL,
+    proof_url  VARCHAR(255), -- 证明材料图片
+    points_reward INT NOT NULL DEFAULT 5,
+    status     ENUM('pending', 'approved', 'rejected') DEFAULT 'pending',
+    admin_id   INT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (student_id) REFERENCES students (student_id) ON DELETE CASCADE,
+    FOREIGN KEY (admin_id) REFERENCES admins (admin_id) ON DELETE SET NULL
+);
+
+-- 视图
+
+-- 各阅览室实时座位统计，占用/预约状态由当前有效预约动态决定
 CREATE VIEW v_room_status AS
 SELECT
     r.room_id,
@@ -226,19 +227,20 @@ SELECT
     COUNT(s.seat_id) AS total_seats,
     SUM(
         CASE
-            WHEN s.status = 'available' THEN 1
-            ELSE 0
+            WHEN s.status = 'maintenance' THEN 0
+            WHEN res.reservation_id IS NOT NULL THEN 0
+            ELSE 1
         END
     ) AS available_seats,
     SUM(
         CASE
-            WHEN s.status = 'reserved' THEN 1
+            WHEN s.status != 'maintenance' AND res.status = 'pending' THEN 1
             ELSE 0
         END
     ) AS reserved_seats,
     SUM(
         CASE
-            WHEN s.status = 'occupied' THEN 1
+            WHEN s.status != 'maintenance' AND res.status IN ('active', 'away') THEN 1
             ELSE 0
         END
     ) AS occupied_seats,
@@ -250,24 +252,27 @@ SELECT
     ) AS maintenance_seats
 FROM rooms r
     LEFT JOIN seats s ON r.room_id = s.room_id
+    LEFT JOIN reservations res ON s.seat_id = res.seat_id 
+        AND res.status IN ('pending', 'active', 'away')
+        AND NOW() BETWEEN CONCAT(res.reserve_date, ' ', res.start_time) AND CONCAT(res.reserve_date, ' ', res.end_time)
 GROUP BY
     r.room_id;
 
--- 2.2 新增视图：Dashboard 综合统计
+-- 大屏占座率视图（同样用实时预约计算，与 v_room_status 保持一致）
 CREATE VIEW v_dashboard_stats AS
 SELECT
     r.room_name,
     COUNT(s.seat_id) AS total_seats,
     SUM(
         CASE
-            WHEN s.status IN ('occupied', 'reserved') THEN 1
+            WHEN res.reservation_id IS NOT NULL THEN 1
             ELSE 0
         END
     ) AS in_use_seats,
     ROUND(
         SUM(
             CASE
-                WHEN s.status IN ('occupied', 'reserved') THEN 1
+                WHEN res.reservation_id IS NOT NULL THEN 1
                 ELSE 0
             END
         ) / NULLIF(COUNT(s.seat_id), 0) * 100,
@@ -275,15 +280,16 @@ SELECT
     ) AS occupancy_rate
 FROM rooms r
     LEFT JOIN seats s ON r.room_id = s.room_id
+    LEFT JOIN reservations res ON s.seat_id = res.seat_id 
+        AND res.status IN ('pending', 'active', 'away')
+        AND NOW() BETWEEN CONCAT(res.reserve_date, ' ', res.start_time) AND CONCAT(res.reserve_date, ' ', res.end_time)
 GROUP BY
     r.room_id;
 
--- =========================================================
--- 3. 存储过程与触发器
--- =========================================================
+-- 存储过程和触发器
 DELIMITER $$
 
--- 3.1 预约座位存储过程 (带学号校验与时间冲突校验)
+-- 预约座位
 CREATE PROCEDURE sp_reserve_seat (
     IN  p_student_id  VARCHAR(20),
     IN  p_seat_id     INT,
@@ -300,6 +306,8 @@ sp_reserve_seat_label: BEGIN
     DECLARE v_conflict    INT DEFAULT 0;
     DECLARE v_stu_conflict INT DEFAULT 0;
     DECLARE v_room_open   TINYINT DEFAULT 1;
+    DECLARE v_room_open_time TIME;
+    DECLARE v_room_close_time TIME;
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
@@ -326,7 +334,14 @@ sp_reserve_seat_label: BEGIN
         LEAVE sp_reserve_seat_label;
     END IF;
 
-    -- 检查学生自身在此时段是否已有其他预约，防止刷单占座
+    IF p_start_time >= p_end_time THEN
+        ROLLBACK;
+        SET p_code = 7;
+        SET p_message = '预约失败：结束时间必须晚于开始时间';
+        LEAVE sp_reserve_seat_label;
+    END IF;
+
+    -- 检查当前时段是否有其他预约
     SELECT COUNT(*) INTO v_stu_conflict FROM reservations
     WHERE student_id = p_student_id AND reserve_date = p_date
       AND status NOT IN ('cancelled', 'completed', 'violated')
@@ -339,7 +354,7 @@ sp_reserve_seat_label: BEGIN
         LEAVE sp_reserve_seat_label;
     END IF;
 
-    SELECT s.status, r.status INTO v_seat_status, v_room_open
+    SELECT s.status, r.status, r.open_time, r.close_time INTO v_seat_status, v_room_open, v_room_open_time, v_room_close_time
     FROM seats s JOIN rooms r ON s.room_id = r.room_id
     WHERE s.seat_id = p_seat_id FOR UPDATE;
 
@@ -350,7 +365,14 @@ sp_reserve_seat_label: BEGIN
         LEAVE sp_reserve_seat_label;
     END IF;
 
-    IF v_seat_status != 'available' THEN
+    IF p_start_time < v_room_open_time OR p_end_time > v_room_close_time THEN
+        ROLLBACK;
+        SET p_code = 8;
+        SET p_message = CONCAT('预约失败：该时段超出了阅览室开放时间（', TIME_FORMAT(v_room_open_time, '%H:%i'), ' - ', TIME_FORMAT(v_room_close_time, '%H:%i'), '）');
+        LEAVE sp_reserve_seat_label;
+    END IF;
+
+    IF v_seat_status = 'maintenance' THEN
         ROLLBACK;
         SET p_code = 2;
         SET p_message = CONCAT('预约失败：座位状态为 [', v_seat_status, ']');
@@ -369,8 +391,6 @@ sp_reserve_seat_label: BEGIN
         SET p_message = '预约失败：该座位在此时段已被预约';
         LEAVE sp_reserve_seat_label;
     END IF;
-
-    UPDATE seats SET status = 'reserved' WHERE seat_id = p_seat_id;
     INSERT INTO reservations (student_id, seat_id, reserve_date, start_time, end_time, status)
     VALUES (p_student_id, p_seat_id, p_date, p_start_time, p_end_time, 'pending');
 
@@ -379,14 +399,7 @@ sp_reserve_seat_label: BEGIN
     SET p_message = CONCAT('预约成功，编号：', LAST_INSERT_ID());
 END$$
 
--- 3.2 积分商城兑换存储过程 (乐观锁版本，高并发防超卖)
--- 架构说明：
---   商品表引入 version 字段作为乐观锁版本号。
---   学生积分扣减仍用 FOR UPDATE（学生行数少，悲观锁代价低）。
---   商品库存改用 CAS (Compare-And-Swap) 模式：
---     UPDATE products SET stock=stock-1, version=version+1
---     WHERE product_id=X AND version=current_version
---   若 ROW_COUNT()=0 则说明有并发冲突，返回 409 让调用方重试。
+-- 积分兑换 (CAS乐观锁)
 CREATE PROCEDURE sp_exchange_product(
     IN  p_student_id VARCHAR(20),
     IN  p_product_id INT,
@@ -410,14 +423,14 @@ sp_exchange_label: BEGIN
 
     START TRANSACTION;
 
-    -- Step 1：锁定学生积分行（学生行少，悲观锁代价可接受）
+    -- 先锁学生行，防止积分被并发扣两次
     SELECT study_points INTO v_stu_pts
     FROM students WHERE student_id = p_student_id FOR UPDATE;
     IF v_stu_pts IS NULL THEN
         ROLLBACK; SET p_code = 404; SET p_msg = '学号不存在'; LEAVE sp_exchange_label;
     END IF;
 
-    -- Step 2：读取商品信息（普通快照读，不加锁）
+    -- 读商品信息，不加锁
     SELECT stock, points_required, status, version
     INTO   v_prod_stock, v_req_pts, v_status, v_version
     FROM   products WHERE product_id = p_product_id;
@@ -432,17 +445,16 @@ sp_exchange_label: BEGIN
         ROLLBACK; SET p_code = 400; SET p_msg = '学习积分不足'; LEAVE sp_exchange_label;
     END IF;
 
-    -- Step 3：CAS 原子扣减库存（乐观锁核心）
-    -- 只有 version 未被其他事务修改时才能更新成功
+    -- CAS 扣库存：只有 version 没被别人改过才能成功
     UPDATE products
     SET    stock   = stock - 1,
            version = version + 1
     WHERE  product_id = p_product_id
-      AND  version    = v_version;  -- 版本匹配才执行
+      AND  version    = v_version;
 
     SET v_affected = ROW_COUNT();
 
-    -- Step 4：检测并发冲突（CAS 失败 → 409 冲突）
+    -- ROW_COUNT() = 0 说明有人抢先一步，让前端重试
     IF v_affected = 0 THEN
         ROLLBACK;
         SET p_code = 409;
@@ -450,7 +462,7 @@ sp_exchange_label: BEGIN
         LEAVE sp_exchange_label;
     END IF;
 
-    -- Step 5：扣减积分 & 写入兑换订单
+    -- 扣积分，写订单
     UPDATE students
     SET    study_points = study_points - v_req_pts
     WHERE  student_id = p_student_id;
@@ -463,13 +475,22 @@ sp_exchange_label: BEGIN
     SET p_msg = '兑换成功';
 END$$
 
--- 3.3 触发器：扣除信用分自动加入黑名单
+-- 信用扣减触发器
 CREATE TRIGGER trg_credit_deduct
 AFTER INSERT ON credit_logs
 FOR EACH ROW
 BEGIN
     DECLARE current_score INT;
-    SELECT credit_score INTO current_score FROM students WHERE student_id = NEW.student_id;
+
+    -- 更新学生信用分，但最高不超过 100 分
+    UPDATE students
+    SET credit_score = LEAST(100, credit_score + NEW.score_change)
+    WHERE student_id = NEW.student_id;
+
+    SELECT credit_score INTO current_score
+    FROM students WHERE student_id = NEW.student_id;
+
+    -- 信用分跌到 0 以下才拉黑，且保持幂等（已在黑名单则跳过）
     IF current_score < 0 THEN
         IF NOT EXISTS (SELECT 1 FROM blacklist WHERE student_id = NEW.student_id AND is_active = 1) THEN
             INSERT INTO blacklist (student_id, reason, is_active)
@@ -478,18 +499,51 @@ BEGIN
     END IF;
 END$$
 
--- 3.4 存储过程：清理超时暂离 (供 Event 调度) - NEW
-CREATE PROCEDURE sp_cleanup_away_overtime()
-BEGIN
-    -- 将暂离超过 2 小时的状态改为违约
-    UPDATE reservations 
-    SET status = 'violated' 
-    WHERE status = 'away' AND updated_at < DATE_SUB(NOW(), INTERVAL 2 HOUR);
-    
-    -- 座位状态释放逻辑可在此扩展...
+-- 定时清理预约记录
+CREATE PROCEDURE sp_cleanup_reservations()
+sp_cleanup_label: BEGIN
+    INSERT INTO credit_logs (student_id, score_change, reason)
+    SELECT r.student_id, -10,
+           CONCAT('爽约：预约序号 ', r.reservation_id, ' 超时未签到')
+    FROM reservations r
+    WHERE r.status = 'pending'
+      AND CONCAT(r.reserve_date, ' ', r.start_time) < DATE_SUB(NOW(), INTERVAL 20 MINUTE);
+
+    UPDATE reservations r
+    SET r.status = 'violated'
+    WHERE r.status = 'pending'
+      AND CONCAT(r.reserve_date, ' ', r.start_time) < DATE_SUB(NOW(), INTERVAL 20 MINUTE);
+
+    -- 超时自动完成（active 过了结束时间，正常自习结束）
+    -- 修复补漏：把该得的积分先发给人家，不然白学了
+    UPDATE students s
+    JOIN reservations r ON s.student_id = r.student_id
+    SET s.study_points = s.study_points + GREATEST(0, ROUND(TIMESTAMPDIFF(MINUTE, r.checkin_time, CONCAT(r.reserve_date, ' ', r.end_time)) / 60.0 * 5))
+    WHERE r.status = 'active'
+      AND CONCAT(r.reserve_date, ' ', r.end_time) < NOW();
+
+    -- 然后再把状态改为完成
+    UPDATE reservations r
+    SET r.status = 'completed'
+    WHERE r.status = 'active'
+      AND CONCAT(r.reserve_date, ' ', r.end_time) < NOW();
+
+    -- 暂离超时（away 超过 20 分钟）→ violated，-5 分
+    INSERT INTO credit_logs (student_id, score_change, reason)
+    SELECT r.student_id, -5,
+           CONCAT('暂离超时：预约序号 ', r.reservation_id, ' 暂离超过 20 分钟')
+    FROM reservations r
+    WHERE r.status = 'away'
+      AND updated_at < DATE_SUB(NOW(), INTERVAL 20 MINUTE);
+
+    UPDATE reservations r
+    SET r.status = 'violated'
+    WHERE r.status = 'away'
+      AND r.updated_at < DATE_SUB(NOW(), INTERVAL 20 MINUTE);
+
 END$$
 
--- 3.5 触发器：信用分变动自动写入审计日志 - NEW
+-- 审计触发器：信用变动
 CREATE TRIGGER trg_audit_credit_change
 AFTER UPDATE ON students
 FOR EACH ROW
@@ -506,7 +560,7 @@ BEGIN
     END IF;
 END$$
 
--- 3.6 触发器：积分兑换自动写入审计日志 - NEW
+-- 审计触发器：积分兑换
 CREATE TRIGGER trg_audit_exchange
 AFTER INSERT ON exchange_orders
 FOR EACH ROW
@@ -522,21 +576,24 @@ BEGIN
     );
 END$$
 
+-- 报修自动锁定座位
+CREATE TRIGGER trg_repair_seat_maintenance
+AFTER INSERT ON repair_tickets
+FOR EACH ROW
+BEGIN
+    IF NEW.seat_id IS NOT NULL THEN
+        UPDATE seats
+        SET status = 'maintenance'
+        WHERE seat_id = NEW.seat_id
+          AND status != 'maintenance';
+    END IF;
+END$$
+
 DELIMITER ;
 
--- =========================================================
--- 4. 定时事件 (Event Scheduler) - NEW
--- =========================================================
--- 每天凌晨 2 点执行超时暂离清理
-CREATE EVENT ev_cleanup_away_overtime
-ON SCHEDULE EVERY 1 DAY STARTS CONCAT(CURDATE() + INTERVAL 1 DAY, ' 02:00:00')
-DO CALL sp_cleanup_away_overtime();
+-- 初始数据
 
--- =========================================================
--- 5. 初始化测试数据
--- =========================================================
-
--- 5.1 阅览室
+-- 阅览室
 INSERT INTO
     rooms (
         room_id,
@@ -595,7 +652,7 @@ VALUES (
         1
     );
 
--- 5.2 批量生成座位数据
+-- 批量生成座位（临时存储过程，用完即删）
 DELIMITER $$
 
 CREATE PROCEDURE tmp_gen_seats(IN rid INT, IN total INT)
@@ -632,8 +689,8 @@ CALL tmp_gen_seats (6, 100);
 
 DROP PROCEDURE tmp_gen_seats;
 
--- 5.3 学生数据 (包含积分和密码哈希，默认密码均为 123456)
--- bcrypt hash of '123456': $2b$10$/ij32ZpmSjj6tAukH5uzLOrSGSQKpK6GMCLsrFfv.VQDjI3p1lSkm
+-- 学生测试账号（密码均为 123456）
+-- bcrypt: $2b$10$/ij32ZpmSjj6tAukH5uzLOrSGSQKpK6GMCLsrFfv.VQDjI3p1lSkm
 INSERT INTO
     students (
         student_id,
@@ -690,152 +747,60 @@ VALUES (
         0
     );
 
--- 5.3.1 管理员账号 (admin / Admin@123)
--- bcrypt hash of 'Admin@123': $2b$10$ya4fQrL5V0HCdNndVuRj7O9WLVJUHsH0ucem6plvvytGLfQbVhm/m
-INSERT INTO admins (username, password_hash, real_name, role)
-VALUES
-    ('admin', '$2b$10$ya4fQrL5V0HCdNndVuRj7O9WLVJUHsH0ucem6plvvytGLfQbVhm/m', '超级管理员', 'super'),
+-- 管理员账号（admin / Admin@123，staff01 / Admin@123）
+-- bcrypt of 'Admin@123': $2b$10$ya4fQrL5V0HCdNndVuRj7O9WLVJUHsH0ucem6plvvytGLfQbVhm/m
+INSERT INTO admins (username, password_hash, real_name, role) VALUES
+    ('admin',   '$2b$10$ya4fQrL5V0HCdNndVuRj7O9WLVJUHsH0ucem6plvvytGLfQbVhm/m', '超级管理员',   'super'),
     ('staff01', '$2b$10$ya4fQrL5V0HCdNndVuRj7O9WLVJUHsH0ucem6plvvytGLfQbVhm/m', '图书馆管理员', 'staff');
 
--- 5.3.2 初始系统公告
+-- 初始系统公告
 INSERT INTO announcements (title, content, admin_id) VALUES
     ('欢迎使用南信大自习空间管理系统', '本系统支持在线座位预约、积分兑换、设备报修等功能。请遵守自习室规定，维护良好的学习环境！', 1),
     ('考试周通宵自习室开放通知', '2026年6月17日至6月28日考试周期间，图书馆6楼自习室将延长开放至次日凌晨2点，欢迎同学们合理利用。', 1),
     ('关于爽约扣分规则的温馨提示', '预约后请务必在开始时间后20分钟内完成签到，否则系统将自动记为爽约并扣除10信用分，座位将同时释放供他人使用。', 1);
 
--- 5.4 积分商城商品
-INSERT INTO
-    products (
-        name,
-        description,
-        points_required,
-        stock,
-        image_url
-    )
-VALUES (
-        '塔斯汀套餐',
-        '可在校内和气象谷门店使用，包含指定汉堡与饮品。',
-        1500,
-        20,
-        '/images/tastien.jpeg'
-    ),
-    (
-        '瑞幸咖啡',
-        '可在校内和气象谷门店使用，兑换任意常规咖啡一杯。',
-        800,
-        50,
-        '/images/luckin.jpeg'
-    ),
-    (
-        '蜜雪冰城饮品',
-        '可在校内和气象谷门店使用，兑换指定饮品一杯。',
-        500,
-        100,
-        '/images/mixue.jpeg'
-    ),
-    (
-        'nuist稿纸',
-        '南信大定制版稿纸一本，记录你的学习点滴。',
-        300,
-        200,
-        '/images/paper.png'
-    );
+-- 积分商城商品
+INSERT INTO products (name, description, points_required, stock, image_url) VALUES     ('塔斯汀套餐',  '可在校内和气象谷门店使用，包含指定汉堡与饮品。',       1500, 20,  '/images/tastien.jpeg'),
+    ('瑞幸咖啡',    '可在校内和气象谷门店使用，兑换任意常规咖啡一杯。',     800,  50,  '/images/luckin.jpeg'),
+    ('蜜雪冰城饮品', '可在校内和气象谷门店使用，兑换指定饮品一杯。',        500,  100, '/images/mixue.jpeg'),
+    ('nuist稿纸',  '南信大定制版稿纸一本，记录你的学习点滴。',             300,  200, '/images/paper.png');
 
--- 5.5 统计图表假数据 (每日自习统计，折线图用)
-INSERT INTO
-    daily_study_stats (
-        stat_date,
-        total_reservations,
-        completed_reservations,
-        total_violations,
-        total_study_hours
-    )
-VALUES (
-        DATE_SUB(CURDATE(), INTERVAL 6 DAY),
-        450,
-        400,
-        12,
-        1200.5
-    ),
-    (
-        DATE_SUB(CURDATE(), INTERVAL 5 DAY),
-        520,
-        480,
-        8,
-        1420.0
-    ),
-    (
-        DATE_SUB(CURDATE(), INTERVAL 4 DAY),
-        480,
-        450,
-        15,
-        1310.2
-    ),
-    (
-        DATE_SUB(CURDATE(), INTERVAL 3 DAY),
-        600,
-        550,
-        5,
-        1600.0
-    ),
-    (
-        DATE_SUB(CURDATE(), INTERVAL 2 DAY),
-        610,
-        580,
-        10,
-        1650.5
-    ),
-    (
-        DATE_SUB(CURDATE(), INTERVAL 1 DAY),
-        590,
-        560,
-        7,
-        1580.0
-    ),
-    (CURDATE(), 120, 30, 2, 210.0);
+-- 近 7 日统计（折线图用）
+INSERT INTO daily_study_stats (stat_date, total_reservations, completed_reservations, total_violations, total_study_hours) VALUES
+    (DATE_SUB(CURDATE(), INTERVAL 6 DAY), 450, 400, 12, 1200.5),
+    (DATE_SUB(CURDATE(), INTERVAL 5 DAY), 520, 480,  8, 1420.0),
+    (DATE_SUB(CURDATE(), INTERVAL 4 DAY), 480, 450, 15, 1310.2),
+    (DATE_SUB(CURDATE(), INTERVAL 3 DAY), 600, 550,  5, 1600.0),
+    (DATE_SUB(CURDATE(), INTERVAL 2 DAY), 610, 580, 10, 1650.5),
+    (DATE_SUB(CURDATE(), INTERVAL 1 DAY), 590, 560,  7, 1580.0),
+    (CURDATE(),                           120,  30,  2,  210.0);
 
--- 制造真实的预约数据，使系统大屏和管理员界面能正常显示 (模拟占座率)
--- 正在使用中的座位
-UPDATE seats SET status = 'occupied' WHERE seat_id IN (1, 2, 3, 101, 102, 221, 222);
+-- 模拟当前在座预约，让大屏占座率有数可显示
 INSERT INTO reservations (student_id, seat_id, reserve_date, start_time, end_time, status) VALUES
-('202213020001', 1, CURDATE(), '08:00:00', '12:00:00', 'active'),
-('202313020001', 2, CURDATE(), '09:00:00', '14:00:00', 'active'),
-('202213020001', 3, CURDATE(), '10:00:00', '15:00:00', 'active'),
-('202213020001', 101, CURDATE(), '08:30:00', '11:30:00', 'active'),
-('202313020001', 102, CURDATE(), '09:30:00', '22:00:00', 'active'),
-('202213020001', 221, CURDATE(), '08:00:00', '11:00:00', 'active'),
-('202213020001', 222, CURDATE(), '10:00:00', '18:00:00', 'active');
+    ('202213020001', 1,   CURDATE(), '08:00:00', '12:00:00', 'active'),
+    ('202313020001', 2,   CURDATE(), '09:00:00', '14:00:00', 'active'),
+    ('202213020001', 3,   CURDATE(), '10:00:00', '15:00:00', 'active'),
+    ('202213020001', 101, CURDATE(), '08:30:00', '11:30:00', 'active'),
+    ('202313020001', 102, CURDATE(), '09:30:00', '22:00:00', 'active'),
+    ('202213020001', 221, CURDATE(), '08:00:00', '11:00:00', 'active'),
+    ('202213020001', 222, CURDATE(), '10:00:00', '18:00:00', 'active'),
+    ('202213020001', 5,   CURDATE(), '14:00:00', '18:00:00', 'pending'),
+    ('202313020001', 6,   CURDATE(), '16:00:00', '20:00:00', 'pending'),
+    ('202213020001', 7,   CURDATE(), '18:00:00', '21:00:00', 'pending'),
+    ('202313020001', 103, CURDATE(), '19:00:00', '22:00:00', 'pending'),
+    ('202213020001', 104, CURDATE(), '20:00:00', '22:00:00', 'pending');
 
--- 已被预约但还未签到的座位
-UPDATE seats SET status = 'reserved' WHERE seat_id IN (5, 6, 7, 103, 104);
-INSERT INTO reservations (student_id, seat_id, reserve_date, start_time, end_time, status) VALUES
-('202213020001', 5, CURDATE(), '14:00:00', '18:00:00', 'pending'),
-('202313020001', 6, CURDATE(), '16:00:00', '20:00:00', 'pending'),
-('202213020001', 7, CURDATE(), '18:00:00', '21:00:00', 'pending'),
-('202313020001', 103, CURDATE(), '19:00:00', '22:00:00', 'pending'),
-('202213020001', 104, CURDATE(), '20:00:00', '22:00:00', 'pending');
-
--- =========================================================
--- 6. 性能优化与自动化维护
--- =========================================================
-
--- 6.1 索引优化 (Index)
--- 优化预约冲突查询与日常大屏查询性能
+-- 索引
 CREATE INDEX idx_reservations_date_seat ON reservations(reserve_date, seat_id);
-CREATE INDEX idx_reservations_student ON reservations(student_id);
-CREATE INDEX idx_logs_type ON system_logs(log_type);
+CREATE INDEX idx_reservations_student   ON reservations(student_id);
+-- idx_log_type 已在 system_logs 表内定义，不重复
 
--- 6.2 自动化维护定时任务 (Event Scheduler)
--- 自动清理已经过了结束时间但状态还是 active 的预约（视为正常结束自习，但未点击签退）
+-- 定时任务：每 2 分钟清理超时预约
 DELIMITER $$
-CREATE EVENT evt_auto_complete_reservations
-ON SCHEDULE EVERY 10 MINUTE
+CREATE EVENT evt_cleanup_reservations
+ON SCHEDULE EVERY 2 MINUTE
 DO
 BEGIN
-    UPDATE reservations 
-    SET status = 'completed' 
-    WHERE status = 'active' 
-      AND reserve_date <= CURDATE() 
-      AND end_time <= CURTIME();
+    CALL sp_cleanup_reservations();
 END$$
 DELIMITER ;

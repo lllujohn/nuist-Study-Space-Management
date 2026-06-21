@@ -1,20 +1,13 @@
-"""
-南信大自习空间管理子系统 - FastAPI 后端 v4.0
-================================================
-重构要点：
-  1. 依赖注入 (Depends + yield) 统一管理数据库 Session
-  2. 全局异常处理器 - 生产级友好 JSON 错误响应
-  3. Pydantic Response Models + 完整类型注解
-  4. 标准化日志格式
-  5. JWT 认证 + bcrypt 密码安全模块
-  6. 管理员后台接口 + 审计日志
-"""
+# 南信大自习室管理系统 - FastAPI 后端
+# 依赖 MySQL 9.x + PyMySQL + SQLAlchemy（raw SQL），不使用 ORM
+# 运行前确保 .env 中配置了 DB_PASS 和 JWT_SECRET
 import csv
 import io
 import logging
 import os
 import re
 import time
+import asyncio
 from collections import defaultdict
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
@@ -24,7 +17,7 @@ import bcrypt
 import jwt
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Header
+from fastapi import Depends, FastAPI, HTTPException, Request, Header, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,23 +25,28 @@ from pydantic import BaseModel, field_validator
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
-# =========================================================
+# 加载 .env，必须在所有 os.getenv 之前执行
+load_dotenv()
+
 # JWT 配置
-# =========================================================
-JWT_SECRET = "lingxi_secret_key_2026"
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError(
+        "❌ 环境变量 JWT_SECRET 未配置！请在 .env 文件中添加：JWT_SECRET=<强随机字符串>"
+    )
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRE_HOURS = 24
 
 
 def create_token(payload: Dict[str, Any]) -> str:
-    """Create a JWT token that expires in JWT_EXPIRE_HOURS hours."""
+    # 签发 JWT Token，管24小时，过期了就得重新登
     data = payload.copy()
     data["exp"] = datetime.utcnow() + timedelta(hours=JWT_EXPIRE_HOURS)
     return jwt.encode(data, JWT_SECRET, algorithm=JWT_ALGORITHM)
 
 
 def verify_token(token: str) -> Dict[str, Any]:
-    """Verify and decode a JWT token. Raises HTTPException on failure."""
+    # 校验 JWT，如果过期或者被篡改直接报错踢出
     try:
         return jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
     except jwt.ExpiredSignatureError:
@@ -57,38 +55,41 @@ def verify_token(token: str) -> Dict[str, Any]:
         raise HTTPException(status_code=401, detail="身份验证失败")
 
 
-def get_current_user(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-    """Dependency: extract and validate JWT from Authorization header."""
+def get_current_user(
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None)
+) -> Dict[str, Any]:
+    # 从请求头或者 URL 参数里把 Token 抠出来校验，不带 Token 就报错拦截
+    if token:
+        return verify_token(token)
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="未登录，请先登录")
-    token = authorization.split(" ", 1)[1]
-    return verify_token(token)
+    token_str = authorization.split(" ", 1)[1]
+    return verify_token(token_str)
 
 
-def require_admin(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
-    """Dependency: ensure caller is an admin."""
-    user = get_current_user(authorization)
+def require_admin(
+    authorization: Optional[str] = Header(None),
+    token: Optional[str] = Query(None)
+) -> Dict[str, Any]:
+    # 权限校验拦截器：只有管理员能过，普通学生统统 403
+    user = get_current_user(authorization=authorization, token=token)
     if user.get("role") not in ("admin_super", "admin_staff"):
         raise HTTPException(status_code=403, detail="需要管理员权限")
     return user
 
-# =========================================================
-# 日志配置 (Logging Configuration)
-# =========================================================
+# 日志
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger("lingxi_api")
 
-# =========================================================
-# 数据库配置 (Database Configuration)
-# =========================================================
-load_dotenv()
+# 数据库连接
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_PORT = os.getenv("DB_PORT", "3306")
 DB_USER = os.getenv("DB_USER", "root")
-DB_PASS = os.getenv("DB_PASS", "88888888")
+DB_PASS = os.getenv("DB_PASS")
 DB_NAME = os.getenv("DB_NAME", "lingxi_db")
 
 DATABASE_URL = (
@@ -99,21 +100,14 @@ engine = create_engine(
     DATABASE_URL,
     pool_size=10,
     max_overflow=20,
-    pool_pre_ping=True,  # 自动检测断开的连接
+    pool_pre_ping=True,
     echo=False,
 )
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-# =========================================================
-# 依赖注入：数据库 Session 工厂 (FastAPI Best Practice)
-# =========================================================
 def get_db() -> Generator[Session, None, None]:
-    """
-    FastAPI 依赖项：提供数据库 Session。
-    使用 yield 确保每次请求结束后 Session 自动关闭，
-    即使发生异常也能正确释放连接回连接池。
-    """
+    # 搞个数据库会话给 FastAPI 依赖注入，用完记得关，不然连接池会爆
     db = SessionLocal()
     try:
         yield db
@@ -121,12 +115,9 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-# =========================================================
-# 应用生命周期 (Lifespan)
-# =========================================================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用启动时验证数据库连接，关闭时释放连接池。"""
+    # FastAPI 生命周期管理：启动的时候连一下数据库测试下，挂了的时候释放资源
     try:
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
@@ -138,12 +129,9 @@ async def lifespan(app: FastAPI):
     logger.info("🔒 数据库连接池已关闭")
 
 
-# =========================================================
-# FastAPI 应用实例
-# =========================================================
 app = FastAPI(
-    title="南信大自习空间管理子系统 API",
-    description="企业级 SaaS 座位预约、积分商城、设备报修综合系统",
+    title="南信大自习空间管理系统 API",
+    description="NUIST 自习室座位预约、积分商城、设备报修系统",
     version="3.0.0",
     lifespan=lifespan,
     docs_url="/api/docs",
@@ -157,68 +145,54 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 挂载本地图片目录，使浏览器可通过 /images/xxx.jpeg 访问
+# 挂载商品图片目录，前端通过 /images/xxx 访问
 _images_dir = os.path.join(os.path.dirname(__file__), "images")
 if os.path.isdir(_images_dir):
     app.mount("/images", StaticFiles(directory=_images_dir), name="images")
 
 
-# =========================================================
-# 限流中间件 (Rate Limiting Middleware)
-# 规则：/api/reserve 和 /api/exchange 这两个高并发写接口
-#          同一 IP 地址每 5 秒内最多请求 3 次。
-# 实现：基于内存的滑动窗口计数（单进程足够）
-# =========================================================
-
-# 存储: {ip -> [(timestamp1), (timestamp2), ...]}
+# 限流：/api/reserve 和 /api/exchange，同一 IP 5 秒内最多 3 次
 _rate_limit_store: DefaultDict[str, List[float]] = defaultdict(list)
-
-# 高并发写接口列表与限流配置
 RATE_LIMITED_PATHS: Tuple[str, ...] = ("/api/reserve", "/api/exchange")
-RATE_LIMIT_MAX     = 3    # 最大请求次数
-RATE_LIMIT_WINDOW  = 5.0  # 时间窗口（秒）
+RATE_LIMIT_MAX    = 3
+RATE_LIMIT_WINDOW = 5.0
 
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    """
-    全局限流中间件。
-
-    针对 /api/reserve 和 /api/exchange 进行 IP 级别限流：
-    同一 IP 在 5 秒内请求超过 3 次，返回 HTTP 429。
-    """
     if any(request.url.path.startswith(p) for p in RATE_LIMITED_PATHS):
-        client_ip = request.client.host if request.client else "unknown"
-        now       = time.monotonic()
+        client_ip = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-IP", request.client.host if request.client else "unknown")).split(",")[0].strip()
+        now = time.monotonic()
 
-        # 清除过期的记录
         timestamps = _rate_limit_store[client_ip]
-        _rate_limit_store[client_ip] = [
-            t for t in timestamps if now - t < RATE_LIMIT_WINDOW
-        ]
+        valid_timestamps = [t for t in timestamps if now - t < RATE_LIMIT_WINDOW]
 
-        if len(_rate_limit_store[client_ip]) >= RATE_LIMIT_MAX:
+        if len(valid_timestamps) >= RATE_LIMIT_MAX:
+            _rate_limit_store[client_ip] = valid_timestamps
             logger.warning("限流触发 [IP=%s PATH=%s]", client_ip, request.url.path)
             return JSONResponse(
                 status_code=429,
                 content={"code": 429, "msg": "请求过于频繁，请稍后再试"},
             )
 
-        _rate_limit_store[client_ip].append(now)
+        valid_timestamps.append(now)
+        _rate_limit_store[client_ip] = valid_timestamps
+
+        # 1% 的概率顺手清理长期不活跃的 IP，防止字典无限膨胀
+        import random
+        if random.random() < 0.01:
+            dead = [ip for ip, ts in _rate_limit_store.items()
+                    if not any(now - t < RATE_LIMIT_WINDOW for t in ts)]
+            for ip in dead:
+                del _rate_limit_store[ip]
 
     return await call_next(request)
 
 
-# =========================================================
-# 全局异常处理器 (Global Exception Handlers)
-# =========================================================
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """
-    捕获所有未处理的服务器异常，返回标准化的 JSON 错误响应，
-    避免将原始堆栈信息暴露给前端客户端。
-    """
-    logger.exception("未捕获的服务器异常 [%s %s]", request.method, request.url.path)
+    # 捕获所有没兜住的异常，防止服务端直接挂掉给前端返回 500
+    logger.exception("未捕获异常 [%s %s]", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
         content={"code": 500, "msg": "服务器内部错误，请稍后重试", "detail": str(exc)},
@@ -227,21 +201,18 @@ async def global_exception_handler(request: Request, exc: Exception) -> JSONResp
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
-    """标准化 HTTPException 的响应格式，与业务 JSON 风格保持一致。"""
+    # 把 FastAPI 原生的 HTTPException 包装成我们自己的格式
     return JSONResponse(
         status_code=exc.status_code,
         content={"code": exc.status_code, "msg": exc.detail},
     )
 
 
-# =========================================================
-# 工具函数 (Utility Functions)
-# =========================================================
 STUDENT_ID_RE = re.compile(r"^202\d{9}$")
 
 
 def api_ok(data: Any = None, msg: str = "success") -> Dict[str, Any]:
-    """标准成功响应封装。"""
+    # 统一下发成功数据的格式结构
     resp: Dict[str, Any] = {"code": 200, "msg": msg}
     if data is not None:
         resp["data"] = data
@@ -249,18 +220,12 @@ def api_ok(data: Any = None, msg: str = "success") -> Dict[str, Any]:
 
 
 def api_err(msg: str, code: int = 400) -> Dict[str, Any]:
-    """标准错误响应封装。"""
+    # 统一下发失败/报错数据的格式
     return {"code": code, "msg": msg}
 
 
 def validate_student_id(student_id: str) -> str:
-    """
-    验证学号格式：12 位数字，且以 202x 开头。
-
-    :param student_id: 待验证的学号字符串
-    :returns: 去除首尾空格后的合法学号
-    :raises HTTPException: 格式不符时抛出 400
-    """
+    # 强制校验学号长度
     sid = student_id.strip()
     if not STUDENT_ID_RE.match(sid):
         raise HTTPException(
@@ -270,20 +235,19 @@ def validate_student_id(student_id: str) -> str:
     return sid
 
 
-# =========================================================
-# Pydantic 请求模型 (Request Models)
-# =========================================================
+# Pydantic 请求体模型
 class ReserveRequest(BaseModel):
     student_id: str
     seat_id: int
     reserve_date: Optional[str] = None
     start_time: Optional[str] = None
     end_time: Optional[str] = None
+    is_looking_for_buddy: bool = False
+    buddy_tags: Optional[str] = None
 
     @field_validator("student_id")
     @classmethod
     def check_student_id(cls, v: str) -> str:
-        """Pydantic 层面的学号格式校验。"""
         if not STUDENT_ID_RE.match(v.strip()):
             raise ValueError("学号必须为 12 位数字，且以 202x 开头")
         return v.strip()
@@ -343,21 +307,21 @@ class AnnouncementRequest(BaseModel):
 
 
 class AdminCreditRequest(BaseModel):
-    delta: int    # 正数增加，负数扣除
+    delta: int    # 正数增加，负数扣减
     reason: str
 
 
 class AdminBlacklistRequest(BaseModel):
-    action: str   # "ban" or "unban"
+    action: str   # ban | unban
     reason: Optional[str] = None
 
 
 class AdminTicketRequest(BaseModel):
-    action: str   # "processing" | "resolved" | "closed"
+    action: str   # processing | resolved | closed
 
 
 class AdminSeatRequest(BaseModel):
-    status: str   # "available" | "maintenance"
+    status: str   # available | maintenance
 
 
 class AdminRoomRequest(BaseModel):
@@ -366,37 +330,36 @@ class AdminRoomRequest(BaseModel):
     open_time: str = "08:00:00"
     close_time: str = "22:00:00"
 
+class MessageRequest(BaseModel):
+    room_id: int
+    content: str
+    is_anonymous: bool = False
 
-# =========================================================
-# 前端页面入口 (Serve Frontend)
-# =========================================================
+class CreditTaskRequest(BaseModel):
+    task_type: str
+    description: str
+    proof_url: Optional[str] = None
+
+class AdminCreditTaskAction(BaseModel):
+    action: str # approved | rejected
+
+
 @app.get("/", include_in_schema=False)
 def serve_index() -> FileResponse:
-    """
-    直接托管 index.html，使用户可通过 http://localhost:8000/ 访问系统，
-    所有图片、API 路径均基于同一域名，无需跨域或绝对路径处理。
-    """
+    # 托管单页应用的 index.html，防缓存很重要，不然每次发版测试同学都要强刷
     response = FileResponse(
         os.path.join(os.path.dirname(__file__), "index.html"),
         media_type="text/html",
     )
-    # 禁用前端 HTML 缓存，确保每次刷新都拿到最新代码
     response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
     response.headers["Pragma"] = "no-cache"
     response.headers["Expires"] = "0"
     return response
 
 
-# =========================================================
-# 数据大屏接口 (Dashboard APIs)
-# =========================================================
-@app.get("/api/dashboard/stats", summary="获取 ECharts 大屏数据源")
+# ---- 数据大屏 ----
+@app.get("/api/dashboard/stats", summary="大屏数据：各阅览室占座率 + 近 7 日违约趋势")
 def get_dashboard_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """
-    返回大屏所需数据：
-    - 各阅览室实时占座率（饼/仪表盘图）
-    - 近 7 日全校违约趋势（折线图）
-    """
     occupancy = db.execute(
         text("SELECT room_name, occupancy_rate FROM v_dashboard_stats")
     ).mappings().all()
@@ -414,54 +377,32 @@ def get_dashboard_stats(db: Session = Depends(get_db)) -> Dict[str, Any]:
     })
 
 
-# =========================================================
-# 阅览室与座位接口 (Rooms & Seats)
-# =========================================================
-@app.get("/api/rooms", summary="获取所有阅览室实时状态")
+# ---- 阅览室与座位 ----
+@app.get("/api/rooms", summary="所有阅览室实时状态")
 def get_rooms(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """查询所有阅览室的实时状态，包括空闲座位数。"""
     rows = db.execute(text("SELECT * FROM v_room_status")).mappings().all()
     return api_ok([dict(r) for r in rows])
 
 
-@app.get("/api/seats/{room_id}", summary="获取指定阅览室的座位列表")
+@app.get("/api/seats/{room_id}", summary="某阅览室的座位列表")
 def get_seats(room_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """
-    获取某一阅览室下所有座位的编号、电源情况与当前状态。
-
-    :param room_id: 阅览室 ID
+    返回该阅览室所有座位及其当前状态。
+    座位状态由当前时间内的活跃预约动态决定，不依赖 seats.status 列（该列仅用于 maintenance）。
     """
-    # 每次获取座位列表前，执行一次懒加载清理：将超过预约开始时间 20 分钟仍未签到的预约标记为爽约，并释放座位
-    try:
-        # 1. 爽约（逾期20分钟未签到）：-10分
-        db.execute(text(
-            "UPDATE reservations r "
-            "INNER JOIN seats s ON r.seat_id = s.seat_id "
-            "INNER JOIN students u ON r.student_id = u.student_id "
-            "SET r.status = 'violated', s.status = 'available', u.credit_score = u.credit_score - 10 "
-            "WHERE r.status = 'pending' "
-            "AND CONCAT(r.reserve_date, ' ', r.start_time) < DATE_SUB(NOW(), INTERVAL 20 MINUTE)"
-        ))
-        # 2. 提前离开未结束自习（时间到了却没有手动签退）：-5分
-        db.execute(text(
-            "UPDATE reservations r "
-            "INNER JOIN seats s ON r.seat_id = s.seat_id "
-            "INNER JOIN students u ON r.student_id = u.student_id "
-            "SET r.status = 'violated', s.status = 'available', u.credit_score = u.credit_score - 5 "
-            "WHERE r.status = 'active' "
-            "AND CONCAT(r.reserve_date, ' ', r.end_time) < NOW()"
-        ))
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        logger.error(f"清理逾期预约失败: {e}")
-
     rows = db.execute(
         text(
-            "SELECT s.seat_id, s.seat_no, s.has_power, s.status, "
-            "r.student_id, u.name as student_name, r.reserve_date, r.start_time, r.end_time "
+            "SELECT s.seat_id, s.seat_no, s.has_power, s.tags, "
+            "CASE "
+            "  WHEN s.status = 'maintenance' THEN 'maintenance' "
+            "  WHEN res.status IN ('active', 'away') THEN 'occupied' "
+            "  WHEN res.status = 'pending' THEN 'reserved' "
+            "  ELSE 'available' "
+            "END AS status, "
+            "r.student_id, u.name as student_name, r.reserve_date, r.start_time, r.end_time, r.is_looking_for_buddy, r.buddy_tags "
             "FROM seats s "
             "LEFT JOIN reservations r ON s.seat_id = r.seat_id AND r.status IN ('pending', 'active', 'away') AND r.reserve_date IN (CURDATE(), DATE_ADD(CURDATE(), INTERVAL 1 DAY)) "
+            "LEFT JOIN reservations res ON s.seat_id = res.seat_id AND res.status IN ('pending', 'active', 'away') AND NOW() BETWEEN CONCAT(res.reserve_date, ' ', res.start_time) AND CONCAT(res.reserve_date, ' ', res.end_time) "
             "LEFT JOIN students u ON r.student_id = u.student_id "
             "WHERE s.room_id = :rid"
         ),
@@ -476,6 +417,7 @@ def get_seats(room_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
                 "seat_id": sid,
                 "seat_no": r["seat_no"],
                 "has_power": r["has_power"],
+                "tags": r["tags"],
                 "status": r["status"],
                 "room_id": room_id,
                 "reservations": []
@@ -486,35 +428,32 @@ def get_seats(room_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
                 "student_name": r["student_name"],
                 "reserve_date": r["reserve_date"],
                 "start_time": r["start_time"],
-                "end_time": r["end_time"]
+                "end_time": r["end_time"],
+                "is_looking_for_buddy": r["is_looking_for_buddy"],
+                "buddy_tags": r["buddy_tags"]
             })
             
     return api_ok(list(seats_dict.values()))
 
 
-@app.post("/api/reserve", summary="提交座位预约（调用存储过程）")
-def reserve_seat(req: ReserveRequest) -> Dict[str, Any]:
-    """
-    调用存储过程 sp_reserve_seat 完成原子性预约：
-    - 学号存在检查
-    - 黑名单检查
-    - 座位状态 + 时间冲突检查
-    - 自动写入 reservations 并更新 seats.status
-
-    注：存储过程使用事务，需通过 raw_connection 调用。
-    """
+@app.post("/api/reserve", summary="提交座位预约")
+def reserve_seat(req: ReserveRequest, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    # 提交座位预约申请（核心接口）
     reserve_date = req.reserve_date or date.today().isoformat()
     start_time   = req.start_time   or "08:00:00"
     end_time     = req.end_time     or "10:00:00"
 
-    from datetime import datetime
+    if user.get("role") == "student" and user.get("sub") != req.student_id:
+        raise HTTPException(status_code=403, detail="越权操作：不能替他人预约")
+
+    # 前置时间校验：不允许预约已经过去的时段
     try:
         fmt = "%Y-%m-%d %H:%M:%S" if start_time.count(':') == 2 else "%Y-%m-%d %H:%M"
         req_dt = datetime.strptime(f"{reserve_date} {start_time}", fmt)
         if req_dt < datetime.now():
             return {"code": 400, "msg": "预约失败：不能预约已经过去的时间段"}
-    except Exception as e:
-        logger.error(f"时间解析错误: {e}")
+    except ValueError as e:
+        logger.error("时间解析失败: %s", e)
 
     raw_conn = engine.raw_connection()
     try:
@@ -526,26 +465,30 @@ def reserve_seat(req: ReserveRequest) -> Dict[str, Any]:
         )
         cursor.execute("SELECT @p_code AS code, @p_message AS message")
         out = cursor.fetchone()
-        raw_conn.commit()
-
+        
         code, msg = out[0], out[1]
+        if code == 0 and (req.is_looking_for_buddy or req.buddy_tags):
+            cursor.execute(
+                "UPDATE reservations SET is_looking_for_buddy = %s, buddy_tags = %s "
+                "WHERE student_id = %s AND seat_id = %s AND reserve_date = %s AND start_time = %s "
+                "ORDER BY reservation_id DESC LIMIT 1",
+                (1 if req.is_looking_for_buddy else 0, req.buddy_tags, req.student_id, req.seat_id, reserve_date, start_time)
+            )
+            
+        raw_conn.commit()
         return {"code": 200 if code == 0 else 400, "msg": msg}
     except Exception:
         raw_conn.rollback()
-        logger.exception("预约座位存储过程异常")
+        logger.exception("预约存储过程异常")
         raise
     finally:
         cursor.close()
         raw_conn.close()
 
 
-@app.get("/api/reservations/{student_id}", summary="查询学生的预约记录")
+@app.get("/api/reservations/{student_id}", summary="查询学生预约记录")
 def get_reservations(student_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """
-    查询某学生的全部预约历史，按创建时间倒序。
-
-    :param student_id: 12 位学号
-    """
+    # 查询这个学生的历史预约记录
     sid = validate_student_id(student_id)
     rows = db.execute(
         text(
@@ -578,27 +521,61 @@ def get_reservations(student_id: str, db: Session = Depends(get_db)) -> Dict[str
 
     return api_ok(data)
 
+class FocusRewardRequest(BaseModel):
+    reservation_id: Optional[int] = None
+
+@app.post("/api/focus/reward", summary="专注倒计时完成奖励")
+def reward_focus(req: FocusRewardRequest, db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    student_id = user["sub"]
+    
+    if not req.reservation_id:
+        return api_ok(msg="普通专注完成，不计入积分！再接再厉！")
+
+    # 获取当前预约状态，并加锁防并发刷分
+    res_data = db.execute(text("SELECT status, checkin_time, last_focus_time FROM reservations WHERE reservation_id = :rid AND student_id = :sid FOR UPDATE"), {"rid": req.reservation_id, "sid": student_id}).fetchone()
+    if not res_data:
+        return {"code": 400, "msg": "预约记录不存在"}
+    
+    if res_data[0] != 'active':
+        return {"code": 400, "msg": "只有在自习中的状态才能获得积分奖励哦！"}
+
+    checkin_time = res_data[1]
+    last_focus_time = res_data[2]
+    
+    # 风控：距离上次领取或者签到，是否真的过了25分钟
+    reference_time = last_focus_time if last_focus_time else checkin_time
+    if not reference_time:
+        return {"code": 400, "msg": "未找到有效的签到时间！"}
+        
+    if datetime.now() < reference_time + timedelta(minutes=25):
+        db.rollback()
+        return {"code": 400, "msg": "太快啦！每次番茄钟必须至少专注 25 分钟才能领奖！"}
+
+    points = 1
+
+    db.execute(text("UPDATE reservations SET last_focus_time = NOW() WHERE reservation_id = :rid"), {"rid": req.reservation_id})
+    res = db.execute(text("UPDATE students SET study_points = study_points + :pts WHERE student_id = :sid"), {"pts": points, "sid": student_id})
+    db.commit()
+    
+    if res.rowcount > 0:
+        return api_ok(msg=f"专注完成，获得 {points} 积分！")
+    return {"code": 400, "msg": "发放积分失败"}
+
 
 @app.post(
     "/api/reservations/{reservation_id}/action",
-    summary="操作预约状态（签到 / 暂离 / 结束 / 取消）",
+    summary="预约状态流转（签到 / 暂离 / 结束 / 取消）",
 )
 def handle_reservation_action(
     reservation_id: int,
     req: ReservationActionRequest,
     db: Session = Depends(get_db),
+    user: Dict[str, Any] = Depends(get_current_user)
 ) -> Dict[str, Any]:
-    """
-    预约状态机流转：
-    - pending  → checkin → active
-    - active   → away    → away
-    - away     → checkin → active
-    - active / away → checkout → completed
-    - pending  → cancel  → cancelled
+    # 处理预约状态变更：签到、暂离、结束自习等
+    if user.get("role") == "student" and user.get("sub") != req.student_id:
+        raise HTTPException(status_code=403, detail="越权操作：无权修改他人的预约状态")
 
-    :param reservation_id: 预约记录 ID
-    :param req: 包含 student_id 和 action 的请求体
-    """
     sid = validate_student_id(req.student_id)
 
     valid_actions = {
@@ -610,7 +587,7 @@ def handle_reservation_action(
     if req.action not in valid_actions:
         raise HTTPException(status_code=400, detail="无效的操作类型")
 
-    # 查询当前预约（FOR UPDATE 加行锁防止并发冲突）
+    # 查询预约并加行锁，防止并发重复操作
     res = db.execute(
         text(
             "SELECT status, seat_id, checkin_time, "
@@ -628,31 +605,31 @@ def handle_reservation_action(
 
     current_status = res["status"]
     new_status     = valid_actions[req.action]
+    now            = datetime.now()
 
-    from datetime import datetime
-    now = datetime.now()
-
-    # 懒处理：如果仍在 pending 状态，但时间已经完全超过了预约开始时间 20 分钟，则直接记为爽约
+    # 如果前端发来操作时预约已经逾期未签到（定时任务还没跑），在此补偿处理
     if current_status == "pending":
-        from datetime import timedelta
         start_dt = datetime.strptime(res["start_dt"], "%Y-%m-%d %H:%M:%S")
         if now > start_dt + timedelta(minutes=20):
             db.execute(text("UPDATE reservations SET status = 'violated' WHERE reservation_id = :rid"), {"rid": reservation_id})
-            db.execute(text("UPDATE students SET credit_score = credit_score - 10 WHERE student_id = :sid"), {"sid": sid})
-            db.execute(text("UPDATE seats SET status = 'available' WHERE seat_id = :seat_id"), {"seat_id": res["seat_id"]})
+            # 扣分通过写 credit_logs 触发 trg_credit_deduct，与定时任务保持一致
+            db.execute(
+                text("INSERT INTO credit_logs (student_id, score_change, reason) VALUES (:sid, -10, :reason)"),
+                {"sid": sid, "reason": f"爽约：预约 #{reservation_id} 逾期20分钟未签到"},
+            )
             db.commit()
-            raise HTTPException(status_code=400, detail="该预约已逾期20分钟未签到，系统已自动记为【爽约】并扣除10信用分。座位已释放。")
+            raise HTTPException(status_code=400, detail="该预约已逾期20分钟未签到，系统已自动记为爽约并扣除10信用分。")
+
 
     # 状态机合法性校验
-    if req.action == "checkin"  and current_status not in ("pending", "away"):
+    if req.action == "checkin" and current_status not in ("pending", "away"):
         raise HTTPException(status_code=400, detail="当前状态无法执行签到")
     if req.action == "checkin" and current_status == "pending":
-        from datetime import timedelta
         start_dt = datetime.strptime(res["start_dt"], "%Y-%m-%d %H:%M:%S")
         if now < start_dt - timedelta(minutes=15):
-            raise HTTPException(status_code=400, detail="太早了！只能在预约时间前 15 分钟内签到。")
+            raise HTTPException(status_code=400, detail="只能在预约时间前 15 分钟内签到")
         if now < start_dt:
-            # 提前签到：检查座位是否还有上一位同学（未到期且未离开）
+            # 提前签到时检查座位上是否还有人（上一个预约还在 active/away）
             overlap = db.execute(
                 text(
                     "SELECT 1 FROM reservations "
@@ -665,15 +642,14 @@ def handle_reservation_action(
                 {"seat_id": res["seat_id"], "rid": reservation_id}
             ).fetchone()
             if overlap:
-                raise HTTPException(status_code=400, detail="上一位同学还未结束自习，请等对方离开后再提前签到。")
-    if req.action == "away"     and current_status != "active":
+                raise HTTPException(status_code=400, detail="上一位同学还未结束自习，请稍后再签到")
+    if req.action == "away" and current_status != "active":
         raise HTTPException(status_code=400, detail="仅自习中状态可暂离")
-    if req.action == "cancel"   and current_status != "pending":
+    if req.action == "cancel" and current_status != "pending":
         raise HTTPException(status_code=400, detail="只能取消待签到的预约")
     if req.action == "checkout" and current_status not in ("active", "away"):
         raise HTTPException(status_code=400, detail="当前状态无法结束自习")
 
-    # 构建动态 SET 子句
     updates = ["status = :status"]
     params: Dict[str, Any] = {"status": new_status, "rid": reservation_id}
 
@@ -681,51 +657,33 @@ def handle_reservation_action(
         updates.append("checkin_time = NOW()")
     if req.action == "checkout":
         updates.append("checkout_time = NOW()")
-        # 计算有效学习积分：每小时 5 积分
+        # 结束自习时根据实际在座时长奖励积分（每小时 5 分）
         checkin_time = res["checkin_time"]
         if checkin_time:
-            db.execute(
-                text(
-                    "UPDATE students "
-                    "SET study_points = study_points + GREATEST(0, ROUND(TIMESTAMPDIFF(MINUTE, :checkin, NOW()) / 60.0 * 5)) "
-                    "WHERE student_id = :sid"
-                ),
-                {"checkin": checkin_time, "sid": sid},
-            )
-
+            # 计算可获得的积分
+            pts_row = db.execute(
+                text("SELECT GREATEST(0, ROUND(TIMESTAMPDIFF(MINUTE, :checkin, NOW()) / 60.0 * 5))"),
+                {"checkin": checkin_time}
+            ).fetchone()
+            pts = int(pts_row[0]) if pts_row else 0
+            if pts > 0:
+                db.execute(
+                    text("UPDATE students SET study_points = study_points + :pts WHERE student_id = :sid"),
+                    {"pts": pts, "sid": sid}
+                )
     db.execute(
         text(f"UPDATE reservations SET {', '.join(updates)} WHERE reservation_id = :rid"),
         params,
-    )
-
-
-    # 同步更新座位状态
-    seat_status: str
-    if new_status in ("active", "away"):
-        seat_status = "occupied"
-    else:
-        seat_status = "available"
-
-    db.execute(
-        text("UPDATE seats SET status = :ss WHERE seat_id = :seat_id"),
-        {"ss": seat_status, "seat_id": res["seat_id"]},
     )
     db.commit()
 
     return api_ok(msg="操作成功")
 
 
-# =========================================================
-# 数据报表导出接口 (Data Export)
-# =========================================================
-@app.get("/api/export/stats", summary="导出每日自习统计为 CSV 文件")
+# ---- 数据导出 ----
+@app.get("/api/export/stats", summary="导出每日自习统计 CSV")
 def export_stats_csv(db: Session = Depends(get_db)) -> StreamingResponse:
-    """
-    将 daily_study_stats 表的数据转换为 CSV 格式流式下载。
-
-    - 设置 Content-Disposition: attachment 头，浏览器直接展示下载对话框。
-    - 使用 StreamingResponse 避免大数据集时内存渢出。
-    """
+    # 给后台大屏做数据导出的，得用流式下载不然服务器内存会爆
     rows = db.execute(
         text(
             "SELECT stat_date, total_reservations, completed_reservations, "
@@ -734,26 +692,14 @@ def export_stats_csv(db: Session = Depends(get_db)) -> StreamingResponse:
         )
     ).mappings().all()
 
-    def _csv_generator():
-        """CSV 行生成器，每行完成后即将数据 flush 到网络。"""
-        buf = io.StringIO()
-        writer = csv.DictWriter(
-            buf,
-            fieldnames=["stat_date", "total_reservations", "completed_reservations",
-                        "total_violations", "total_study_hours"],
-        )
-        # 写入中文表头
-        buf.write("日期,总预约数,完成数,违约次数,自习总时数(h)\n")
-        yield buf.getvalue()
+    fieldnames = ["stat_date", "total_reservations", "completed_reservations",
+                  "total_violations", "total_study_hours"]
 
+    def _csv_generator():
+        yield "日期,总预约数,完成数,违约次数,自习总时数(h)\n"
         for row in rows:
             buf = io.StringIO()
-            writer = csv.DictWriter(
-                buf,
-                fieldnames=["stat_date", "total_reservations", "completed_reservations",
-                            "total_violations", "total_study_hours"],
-            )
-            writer.writerow(dict(row))
+            csv.DictWriter(buf, fieldnames=fieldnames).writerow(dict(row))
             yield buf.getvalue()
 
     filename = f"study_stats_{date.today().isoformat()}.csv"
@@ -764,20 +710,10 @@ def export_stats_csv(db: Session = Depends(get_db)) -> StreamingResponse:
     )
 
 
-# =========================================================
-# 学生、信用、积分接口 (Students)
-# =========================================================
-@app.get("/api/students/{student_id}", summary="查询学生信息（含信用分、积分与违约历史）")
+# ---- 学生信息 ----
+@app.get("/api/students/{student_id}", summary="查询学生信息（含信用分与违约记录）")
 def get_student(student_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """
-    综合查询学生档案：
-    - 基本信息（学号、姓名、邮箱）
-    - 信用分与学习积分
-    - 是否在黑名单及原因
-    - 最近 5 条违约记录
-
-    :param student_id: 12 位学号
-    """
+    # 获取个人中心需要的全量数据（信用分、黑名单等等都在这）
     sid = validate_student_id(student_id)
 
     stu = db.execute(
@@ -819,29 +755,22 @@ def get_student(student_id: str, db: Session = Depends(get_db)) -> Dict[str, Any
     return api_ok(data)
 
 
-# =========================================================
-# 商城系统 (Products & Exchange)
-# =========================================================
-@app.get("/api/products", summary="获取积分商城商品列表")
+# ---- 积分商城 ----
+@app.get("/api/products", summary="积分商城商品列表")
 def get_products(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """查询所有上架商品（status = 1），按所需积分升序排列。"""
+    # 积分商城拉商品列表，把下架的过滤掉
     rows = db.execute(
         text("SELECT * FROM products WHERE status = 1 ORDER BY points_required ASC")
     ).mappings().all()
     return api_ok([dict(r) for r in rows])
 
 
-@app.post("/api/exchange", summary="积分兑换商品（悲观锁，防超卖）")
-def exchange_product(req: ExchangeRequest) -> Dict[str, Any]:
-    """
-    调用存储过程 sp_exchange_product 完成原子性积分兑换：
-    - 学号存在检查
-    - 库存检查（FOR UPDATE 悲观锁）
-    - 积分余额检查
-    - 扣减积分 + 扣减库存 + 写入兑换订单
+@app.post("/api/exchange", summary="积分兑换商品")
+def exchange_product(req: ExchangeRequest, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    # 核心交易接口：兑换商品。为了防超卖和刷分，这里强依赖 MySQL 的存储过程
+    if user.get("role") == "student" and user.get("sub") != req.student_id:
+        raise HTTPException(status_code=403, detail="越权操作：不能扣减他人的积分")
 
-    :param req: 包含 student_id 和 product_id 的请求体
-    """
     validate_student_id(req.student_id)
 
     raw_conn = engine.raw_connection()
@@ -867,17 +796,13 @@ def exchange_product(req: ExchangeRequest) -> Dict[str, Any]:
         raw_conn.close()
 
 
-# =========================================================
-# 设备报修系统 (Repairs)
-# =========================================================
+# ---- 设备报修 ----
 @app.post("/api/repairs", summary="提交设备报修工单")
-def submit_repair(req: RepairRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """
-    提交报修工单。触发器 trg_repair_seat_maintenance 会自动
-    将关联座位的状态更新为 'maintenance'，无需在此手动操作。
+def submit_repair(req: RepairRequest, db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    # 提交报修。只要一提交，底层触发器就会把这个座位标红（维护中）
+    if user.get("role") == "student" and user.get("sub") != req.student_id:
+        raise HTTPException(status_code=403, detail="越权操作：不能替他人报修")
 
-    :param req: 报修请求体（学号、阅览室、座位、故障描述）
-    """
     validate_student_id(req.student_id)
     db.execute(
         text(
@@ -896,9 +821,9 @@ def submit_repair(req: RepairRequest, db: Session = Depends(get_db)) -> Dict[str
     return api_ok(msg="报修工单已提交，座位已临时锁定为维修状态")
 
 
-@app.get("/api/repairs", summary="获取所有报修工单列表")
+@app.get("/api/repairs", summary="所有报修工单")
 def get_repairs(db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """查询全部报修工单，含阅览室名称与座位编号，按时间倒序。"""
+    # 查工单列表（关联查了房间号）
     rows = db.execute(
         text(
             """
@@ -919,12 +844,10 @@ def get_repairs(db: Session = Depends(get_db)) -> Dict[str, Any]:
     return api_ok([dict(r) for r in rows])
 
 
-# =========================================================
-# 认证接口 (Auth APIs)
-# =========================================================
+# ---- 认证 ----
 @app.post("/api/auth/register", summary="学生注册")
 def student_register(req: RegisterRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """学生注册：学号、姓名、手机号、密码（bcrypt 加密存储）。"""
+    # 学生注册。密码千万别明文存，不然裤子被拖了就惨了
     sid = req.student_id.strip()
     # 检查学号是否已存在
     exists = db.execute(text("SELECT 1 FROM students WHERE student_id = :sid"), {"sid": sid}).fetchone()
@@ -946,7 +869,7 @@ def student_register(req: RegisterRequest, db: Session = Depends(get_db)) -> Dic
 
 @app.post("/api/auth/login", summary="学生登录")
 def student_login(req: LoginRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """学生登录：验证学号和密码，返回 JWT token。"""
+    # 学生登录。校验密码比对 hash，全对才发 Token
     row = db.execute(
         text("SELECT student_id, name, password_hash, credit_score FROM students WHERE student_id = :sid"),
         {"sid": req.student_id.strip()}
@@ -974,7 +897,7 @@ def student_login(req: LoginRequest, db: Session = Depends(get_db)) -> Dict[str,
 
 @app.post("/api/auth/admin/login", summary="管理员登录")
 def admin_login(req: AdminLoginRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """管理员登录：验证用户名和密码，返回 JWT token（role=admin_super/admin_staff）。"""
+    # 后台管理员专用登录口
     row = db.execute(
         text("SELECT admin_id, username, real_name, password_hash, role FROM admins WHERE username = :u"),
         {"u": req.username}
@@ -998,9 +921,9 @@ def admin_login(req: AdminLoginRequest, db: Session = Depends(get_db)) -> Dict[s
     })
 
 
-@app.post("/api/auth/reset-password", summary="找回密码（学号+手机号验证）")
+@app.post("/api/auth/reset-password", summary="重置密码")
 def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)) -> Dict[str, Any]:
-    """通过学号+预留手机号验证身份，重置密码。不需要验证码，符合课程设计规范。"""
+    # 忘记密码的找回功能，比较简陋，以后可以接个短信验证码
     row = db.execute(
         text("SELECT student_id FROM students WHERE student_id = :sid AND phone = :phone"),
         {"sid": req.student_id.strip(), "phone": req.phone.strip()}
@@ -1014,10 +937,8 @@ def reset_password(req: ResetPasswordRequest, db: Session = Depends(get_db)) -> 
     return api_ok(msg="密码已重置，请重新登录")
 
 
-# =========================================================
-# 公告接口 (Announcements)
-# =========================================================
-@app.get("/api/announcements", summary="获取最新公告列表（学生端）")
+# ---- 公告 ----
+@app.get("/api/announcements", summary="公告列表")
 def get_announcements(db: Session = Depends(get_db)) -> Dict[str, Any]:
     rows = db.execute(text(
         "SELECT id, title, content, DATE_FORMAT(created_at, '%Y-%m-%d') AS created_at "
@@ -1053,10 +974,8 @@ def delete_announcement(
     return api_ok(msg="公告已删除")
 
 
-# =========================================================
-# 管理员接口 (Admin APIs)
-# =========================================================
-@app.get("/api/admin/students", summary="获取所有学生列表")
+# ---- 管理员后台 ----
+@app.get("/api/admin/students", summary="所有学生列表")
 def admin_get_students(
     skip: int = 0,
     limit: int = 50,
@@ -1071,7 +990,7 @@ def admin_get_students(
     return api_ok([dict(r) for r in rows])
 
 
-@app.patch("/api/admin/students/{student_id}/credit", summary="管理员调整学生信用分")
+@app.patch("/api/admin/students/{student_id}/credit", summary="调整学生信用分")
 def admin_adjust_credit(
     student_id: str,
     req: AdminCreditRequest,
@@ -1090,7 +1009,7 @@ def admin_adjust_credit(
     return api_ok({"new_credit_score": new_score}, msg="信用分已调整")
 
 
-@app.patch("/api/admin/students/{student_id}/blacklist", summary="拉黑/解封学生")
+@app.patch("/api/admin/students/{student_id}/blacklist", summary="拉黑或解封学生")
 def admin_blacklist(
     student_id: str,
     req: AdminBlacklistRequest,
@@ -1143,7 +1062,7 @@ def admin_update_ticket(
     valid = ("processing", "resolved", "closed")
     if req.action not in valid:
         raise HTTPException(status_code=400, detail=f"action 必须为 {valid}")
-    # 若工单变为 resolved，将对应座位恢复可用
+    # 工单 resolved 时把对应座位从 maintenance 恢复为 available
     if req.action == "resolved":
         ticket = db.execute(text(
             "SELECT seat_id FROM repair_tickets WHERE ticket_id = :tid"
@@ -1159,7 +1078,7 @@ def admin_update_ticket(
     return api_ok(msg="工单已更新")
 
 
-@app.get("/api/admin/rooms", summary="管理员获取阅览室列表")
+@app.get("/api/admin/rooms", summary="阅览室列表（管理员）")
 def admin_get_rooms(db: Session = Depends(get_db), admin: Dict = Depends(require_admin)) -> Dict[str, Any]:
     rows = db.execute(text("SELECT * FROM v_room_status")).mappings().all()
     return api_ok([dict(r) for r in rows])
@@ -1181,13 +1100,13 @@ def admin_add_room(
     return api_ok(msg="阅览室添加成功")
 
 
-@app.delete("/api/admin/rooms/{room_id}", summary="管理员删除阅览室")
+@app.delete("/api/admin/rooms/{room_id}", summary="删除阅览室")
 def admin_delete_room(
     room_id: int,
     db: Session = Depends(get_db),
     admin: Dict = Depends(require_admin)
 ) -> Dict[str, Any]:
-    # CASCADE setting in foreign keys handles deletion of related seats and reservations
+    # 外键级联删除会同时清理该阅览室下的所有座位和相关预约
     db.execute(text("DELETE FROM rooms WHERE room_id = :rid"), {"rid": room_id})
     db.execute(text(
         "INSERT INTO system_logs (log_type, operator, content) VALUES ('admin_op', :op, :c)"
@@ -1214,10 +1133,8 @@ def admin_update_seat(
     return api_ok(msg="座位状态已更新")
 
 
-# =========================================================
-# 操作审计日志接口 (Audit Logs)
-# =========================================================
-@app.get("/api/admin/logs", summary="管理员查看系统操作日志")
+# ---- 审计日志 ----
+@app.get("/api/admin/logs", summary="系统操作日志")
 def admin_get_logs(
     log_type: Optional[str] = None,
     skip: int = 0,
@@ -1226,7 +1143,7 @@ def admin_get_logs(
     admin: Dict = Depends(require_admin)
 ) -> Dict[str, Any]:
     where = "WHERE log_type = :lt" if log_type else ""
-    params = {"limit": limit, "skip": skip}
+    params: Dict[str, Any] = {"limit": limit, "skip": skip}
     if log_type:
         params["lt"] = log_type
     rows = db.execute(
@@ -1237,3 +1154,128 @@ def admin_get_logs(
     ).mappings().all()
     return api_ok([dict(r) for r in rows])
 
+
+# ---- Room Guestbook ----
+@app.get("/api/rooms/{room_id}/messages", summary="获取自习室留言")
+def get_room_messages(room_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    rows = db.execute(text(
+        "SELECT m.msg_id, m.content, m.is_anonymous, m.created_at, m.student_id, "
+        "IF(m.is_anonymous, '匿名同学', s.name) as author_name "
+        "FROM room_messages m "
+        "JOIN students s ON m.student_id = s.student_id "
+        "WHERE m.room_id = :rid AND m.status = 1 "
+        "ORDER BY m.created_at DESC"
+    ), {"rid": room_id}).mappings().all()
+    
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["created_at"] = str(d["created_at"])
+        res.append(d)
+    return api_ok(res)
+
+@app.post("/api/rooms/{room_id}/messages", summary="发布留言")
+def post_room_message(room_id: int, req: MessageRequest, db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    student_id = user["sub"]
+    db.execute(text(
+        "INSERT INTO room_messages (room_id, student_id, content, is_anonymous) "
+        "VALUES (:rid, :sid, :content, :anon)"
+    ), {"rid": room_id, "sid": student_id, "content": req.content, "anon": 1 if req.is_anonymous else 0})
+    db.commit()
+    return api_ok(msg="留言发布成功")
+
+@app.delete("/api/messages/{msg_id}", summary="删除留言")
+def delete_room_message(msg_id: int, db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    student_id = user["sub"]
+    if user.get("role") == "admin":
+        res = db.execute(text("UPDATE room_messages SET status = 0 WHERE msg_id = :mid"), {"mid": msg_id})
+    else:
+        res = db.execute(text("UPDATE room_messages SET status = 0 WHERE msg_id = :mid AND student_id = :sid"), {"mid": msg_id, "sid": student_id})
+    
+    db.commit()
+    if res.rowcount > 0:
+        return api_ok(msg="留言已删除")
+    return {"code": 400, "msg": "删除失败，可能无权限或留言不存在"}
+
+# ---- Credit Recovery Tasks ----
+@app.post("/api/credit-tasks", summary="申请信用分恢复")
+def apply_credit_task(req: CreditTaskRequest, db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    student_id = user["sub"]
+    db.execute(text(
+        "INSERT INTO credit_tasks (student_id, task_type, description, proof_url) "
+        "VALUES (:sid, :ttype, :desc, :proof)"
+    ), {"sid": student_id, "ttype": req.task_type, "desc": req.description, "proof": req.proof_url})
+    db.commit()
+    return api_ok(msg="申请已提交，等待管理员审核")
+
+@app.get("/api/credit-tasks", summary="查看我的申请/管理员查看所有申请")
+def get_credit_tasks(db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    is_admin = user.get("role") in ("admin_super", "admin_staff")
+    if is_admin:
+        rows = db.execute(text(
+            "SELECT t.*, s.name as student_name FROM credit_tasks t "
+            "JOIN students s ON t.student_id = s.student_id ORDER BY t.created_at DESC"
+        )).mappings().all()
+    else:
+        rows = db.execute(text(
+            "SELECT * FROM credit_tasks WHERE student_id = :sid ORDER BY created_at DESC"
+        ), {"sid": user["sub"]}).mappings().all()
+        
+    res = []
+    for r in rows:
+        d = dict(r)
+        d["created_at"] = str(d["created_at"])
+        d["updated_at"] = str(d["updated_at"])
+        res.append(d)
+    return api_ok(res)
+
+@app.post("/api/admin/credit-tasks/{task_id}/action", summary="管理员审核志愿任务")
+def admin_audit_credit_task(task_id: int, req: AdminCreditTaskAction, db: Session = Depends(get_db), admin: Dict = Depends(require_admin)) -> Dict[str, Any]:
+    if req.action not in ("approved", "rejected"):
+        raise HTTPException(status_code=400, detail="Invalid action")
+        
+    task = db.execute(text("SELECT * FROM credit_tasks WHERE task_id = :tid FOR UPDATE"), {"tid": task_id}).mappings().first()
+    if not task:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if task["status"] != "pending":
+        raise HTTPException(status_code=400, detail="该任务已处理过")
+        
+    db.execute(text("UPDATE credit_tasks SET status = :s WHERE task_id = :tid"), 
+               {"s": req.action, "tid": task_id})
+               
+    if req.action == "approved":
+        db.execute(text(
+            "INSERT INTO credit_logs (student_id, score_change, reason) VALUES (:sid, :pts, :reason)"
+        ), {"sid": task["student_id"], "pts": task["points_reward"], "reason": f"完成信用分恢复任务：{task['task_type']}"})
+        
+    db.commit()
+    return api_ok(msg="审核完成")
+
+# ---- SSE Notifications ----
+@app.get("/api/stream/notifications", summary="SSE 消息通知订阅")
+async def stream_notifications(request: Request, db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)):
+    student_id = user.get("sub")
+    if not student_id or user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Not a student")
+        
+    async def event_generator():
+        while True:
+            if await request.is_disconnected():
+                break
+                
+            with engine.connect() as conn:
+                res = conn.execute(text(
+                    "SELECT reservation_id, room_name, seat_no, start_time "
+                    "FROM reservations res JOIN seats s ON res.seat_id = s.seat_id JOIN rooms r ON s.room_id = r.room_id "
+                    "WHERE res.student_id = :sid AND res.status = 'pending' "
+                    "AND CONCAT(res.reserve_date, ' ', res.start_time) BETWEEN NOW() AND DATE_ADD(NOW(), INTERVAL 15 MINUTE) "
+                    "LIMIT 1"
+                ), {"sid": student_id}).mappings().first()
+                
+            if res:
+                yield f"data: {{\"type\": \"reminder\", \"msg\": \"你的自习预约即将开始，请准备签到！({res['room_name']} - {res['seat_no']})\"}}\n\n"
+                
+            await asyncio.sleep(10)
+            yield f"data: {{\"type\": \"ping\"}}\n\n"
+            
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
