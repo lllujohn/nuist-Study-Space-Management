@@ -896,9 +896,10 @@
                       :style="{fontSize: '32px', fontWeight: 600, color: profile.credit_score < 60 ? '#ef4444' : '#22c55e'}">
                       {{ profile.credit_score }}</div>
                   </div>
-                  <div style="flex:1; border: 1px solid var(--border-color); padding: 16px; border-radius: 8px;">
+                  <div style="flex:1; border: 1px solid var(--border-color); padding: 16px; border-radius: 8px; position: relative;">
                     <div style="color:var(--text-secondary); font-size: 13px; margin-bottom: 8px;">学习积分</div>
                     <div style="font-size: 32px; font-weight: 600; color: #fff;">{{ profile.study_points }}</div>
+                    <el-button size="small" type="success" plain style="position: absolute; right: 16px; top: 16px; background: transparent; border-color: #22c55e; color: #22c55e;" @click="loadPointsLogs">积分明细</el-button>
                   </div>
                 </div>
 
@@ -1457,6 +1458,21 @@
       </template>
     </el-dialog>
 
+    <!-- Points Logs Dialog -->
+    <el-dialog v-model="pointsLogsVisible" title="积分明细 (近15天)" width="500px" style="background: var(--bg-surface); border-radius: 12px;">
+      <el-table :data="pointsLogs" v-loading="pointsLogsLoading" style="width: 100%" size="small">
+        <el-table-column prop="created_at" label="时间" width="160"></el-table-column>
+        <el-table-column label="变动" width="80">
+          <template #default="{row}">
+            <span :style="{color: row.points_change > 0 ? '#22c55e' : '#ef4444', fontWeight: 'bold'}">
+              {{ row.points_change > 0 ? '+' : '' }}{{ row.points_change }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column prop="reason" label="详细说明"></el-table-column>
+      </el-table>
+    </el-dialog>
+
   </div><!-- end layout -->
 
   <!-- ========== Admin Panel Pages (shown inside layout .content-area via v-show) ========== -->
@@ -1981,6 +1997,21 @@
 
         const profile = ref(null);
         const profileLoading = ref(false);
+        
+        const pointsLogsVisible = ref(false);
+        const pointsLogsLoading = ref(false);
+        const pointsLogs = ref([]);
+        const loadPointsLogs = async () => {
+          pointsLogsVisible.value = true;
+          pointsLogsLoading.value = true;
+          try {
+            const r = await apiFetch(`${API_BASE}/api/students/me/points_logs`);
+            const j = await r.json();
+            if (j.code === 200) pointsLogs.value = j.data;
+            else ElMessage.error(j.msg || '获取失败');
+          } finally { pointsLogsLoading.value = false; }
+        };
+
         const fetchProfile = async () => {
           if (!currentUser.value || !currentUser.value.student_id) return;
           const sid = currentUser.value.student_id;
@@ -2225,6 +2256,7 @@
           products, storeLoading, exchangeDialogVisible, exchangeForm, targetProduct, exchangeLoading, openExchange, submitExchange,
           repairs, repairsLoading, repairForm, repairSeats, handleRepairRoomChange, submitRepair,
           profile, profileLoading, fetchProfile,
+          pointsLogsVisible, pointsLogsLoading, pointsLogs, loadPointsLogs,
           currentTime,
           myReservations, resLoading, hasSearchedRes, fetchMyReservations, handleResAction,
           focusTimer, focusTimeDisplay, startFocusMode, cancelFocusMode,

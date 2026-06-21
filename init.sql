@@ -184,6 +184,18 @@ CREATE TABLE system_logs (
     INDEX idx_log_student (student_id)
 );
 
+-- 学习积分变动明细表
+CREATE TABLE study_points_logs (
+    log_id     INT AUTO_INCREMENT PRIMARY KEY,
+    student_id VARCHAR(20) NOT NULL,
+    points_change INT NOT NULL,
+    reason     VARCHAR(255) NOT NULL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_spl_student (student_id),
+    INDEX idx_spl_created_at (created_at),
+    FOREIGN KEY (student_id) REFERENCES students(student_id) ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 -- 自习室留言板/树洞
 CREATE TABLE room_messages (
     msg_id     INT AUTO_INCREMENT PRIMARY KEY,
@@ -515,7 +527,17 @@ sp_cleanup_label: BEGIN
       AND CONCAT(r.reserve_date, ' ', r.start_time) < DATE_SUB(NOW(), INTERVAL 20 MINUTE);
 
     -- 超时自动完成（active 过了结束时间，正常自习结束）
-    -- 修复补漏：把该得的积分先发给人家，不然白学了
+    -- 修复补漏：先把该得的积分变动写入明细表
+    INSERT INTO study_points_logs (student_id, points_change, reason)
+    SELECT r.student_id,
+           GREATEST(0, ROUND(TIMESTAMPDIFF(MINUTE, r.checkin_time, CONCAT(r.reserve_date, ' ', r.end_time)) / 60.0 * 5)),
+           CONCAT('系统结算：预约 #', r.reservation_id, ' 到期自动结算学习时长奖励')
+    FROM reservations r
+    WHERE r.status = 'active'
+      AND CONCAT(r.reserve_date, ' ', r.end_time) < NOW()
+      AND GREATEST(0, ROUND(TIMESTAMPDIFF(MINUTE, r.checkin_time, CONCAT(r.reserve_date, ' ', r.end_time)) / 60.0 * 5)) > 0;
+
+    -- 发给人家，不然白学了
     UPDATE students s
     JOIN reservations r ON s.student_id = r.student_id
     SET s.study_points = s.study_points + GREATEST(0, ROUND(TIMESTAMPDIFF(MINUTE, r.checkin_time, CONCAT(r.reserve_date, ' ', r.end_time)) / 60.0 * 5))
@@ -574,6 +596,9 @@ BEGIN
         NEW.student_id,
         CONCAT('学生[', NEW.student_id, ']兑换商品「', v_prod_name, '」，消耗积分 ', NEW.points_deducted, ' 分')
     );
+    
+    INSERT INTO study_points_logs (student_id, points_change, reason)
+    VALUES (NEW.student_id, -NEW.points_deducted, CONCAT('商城兑换：消耗积分兑换商品「', v_prod_name, '」'));
 END$$
 
 -- 报修自动锁定座位
@@ -816,6 +841,14 @@ BEGIN
     -- 记录系统日志
     INSERT INTO system_logs (log_type, operator, content)
     VALUES ('admin_op', 'system', '系统自动触发每月信誉分恢复与黑名单清空操作');
+END$$
+
+-- 定时任务：每天凌晨清理超过15天的积分明细记录
+CREATE EVENT evt_cleanup_points_logs
+ON SCHEDULE EVERY 1 DAY STARTS DATE_FORMAT(NOW() + INTERVAL 1 DAY, '%Y-%m-%d 03:00:00')
+DO
+BEGIN
+    DELETE FROM study_points_logs WHERE created_at < DATE_SUB(NOW(), INTERVAL 15 DAY);
 END$$
 
 DELIMITER ;

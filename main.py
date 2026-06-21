@@ -555,6 +555,10 @@ def reward_focus(req: FocusRewardRequest, db: Session = Depends(get_db), user: D
 
     db.execute(text("UPDATE reservations SET last_focus_time = NOW() WHERE reservation_id = :rid"), {"rid": req.reservation_id})
     res = db.execute(text("UPDATE students SET study_points = study_points + :pts WHERE student_id = :sid"), {"pts": points, "sid": student_id})
+    db.execute(
+        text("INSERT INTO study_points_logs (student_id, points_change, reason) VALUES (:sid, :pts, :reason)"),
+        {"sid": student_id, "pts": points, "reason": "番茄钟专注完成奖励"}
+    )
     db.commit()
     
     if res.rowcount > 0:
@@ -671,6 +675,10 @@ def handle_reservation_action(
                     text("UPDATE students SET study_points = study_points + :pts WHERE student_id = :sid"),
                     {"pts": pts, "sid": sid}
                 )
+                db.execute(
+                    text("INSERT INTO study_points_logs (student_id, points_change, reason) VALUES (:sid, :pts, :reason)"),
+                    {"sid": sid, "pts": pts, "reason": "正常签退：系统结算时长奖励"}
+                )
     db.execute(
         text(f"UPDATE reservations SET {', '.join(updates)} WHERE reservation_id = :rid"),
         params,
@@ -711,6 +719,18 @@ def export_stats_csv(db: Session = Depends(get_db)) -> StreamingResponse:
 
 
 # ---- 学生信息 ----
+
+@app.get("/api/students/me/points_logs", summary="获取当前登录学生的积分明细")
+def get_my_points_logs(db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
+    if user["role"] != "student":
+        raise HTTPException(status_code=403, detail="仅学生可查看积分明细")
+    sid = user["id"]
+    rows = db.execute(
+        text("SELECT log_id, points_change, reason, created_at FROM study_points_logs WHERE student_id = :sid ORDER BY created_at DESC"),
+        {"sid": sid}
+    ).mappings().fetchall()
+    return {"code": 200, "data": [dict(r) for r in rows]}
+
 @app.get("/api/students/{student_id}", summary="查询学生信息（含信用分与违约记录）")
 def get_student(student_id: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
     # 获取个人中心需要的全量数据（信用分、黑名单等等都在这）
