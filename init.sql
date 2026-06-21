@@ -528,9 +528,9 @@ sp_cleanup_label: BEGIN
     WHERE r.status = 'active'
       AND CONCAT(r.reserve_date, ' ', r.end_time) < NOW();
 
-    -- 暂离超时（away 超过 20 分钟）→ violated，-5 分
+    -- 暂离超时（away 超过 20 分钟）→ violated，-10 分
     INSERT INTO credit_logs (student_id, score_change, reason)
-    SELECT r.student_id, -5,
+    SELECT r.student_id, -10,
            CONCAT('暂离超时：预约序号 ', r.reservation_id, ' 暂离超过 20 分钟')
     FROM reservations r
     WHERE r.status = 'away'

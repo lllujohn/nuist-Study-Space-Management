@@ -47,7 +47,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | 触发器 | `trg_credit_deduct` | 往 credit_logs 插数据后自动扣分，分数跌到 0 以下自动拉黑 |
 | 存储过程 | `sp_reserve_seat` | 预约主流程，事务里做完黑名单/冲突检测/写入 |
 | 存储过程 | `sp_exchange_product` | 积分兑换，乐观锁（version 字段 CAS）防超卖 |
-| 存储过程 | `sp_cleanup_reservations` | 定时清理：爽约 -10 分，暂离超时 -5 分，过期 active 标完成 |
+| 存储过程 | `sp_cleanup_reservations` | 定时清理：爽约 -10 分，暂离超时 -10 分，过期 active 标完成 |
 | 定时事件 | `evt_cleanup_reservations` | 每 2 分钟跑一次 sp_cleanup_reservations |
 
 ## 测试账号
