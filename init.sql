@@ -803,4 +803,19 @@ DO
 BEGIN
     CALL sp_cleanup_reservations();
 END$$
+
+-- 定时任务：每月 1 号凌晨 0 点自动恢复所有学生的信誉分，并解封黑名单
+CREATE EVENT evt_monthly_credit_recovery
+ON SCHEDULE EVERY 1 MONTH STARTS DATE_FORMAT(NOW() + INTERVAL 1 MONTH, '%Y-%m-01 00:00:00')
+DO
+BEGIN
+    -- 恢复信誉分
+    UPDATE students SET credit_score = 100;
+    -- 解除本月黑名单
+    UPDATE blacklist SET is_active = 0 WHERE is_active = 1;
+    -- 记录系统日志
+    INSERT INTO system_logs (log_type, operator, content)
+    VALUES ('admin_op', 'system', '系统自动触发每月信誉分恢复与黑名单清空操作');
+END$$
+
 DELIMITER ;

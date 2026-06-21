@@ -49,6 +49,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 | 存储过程 | `sp_exchange_product` | 积分兑换，乐观锁（version 字段 CAS）防超卖 |
 | 存储过程 | `sp_cleanup_reservations` | 定时清理：爽约 -10 分，暂离超时 -10 分，过期 active 标完成 |
 | 定时事件 | `evt_cleanup_reservations` | 每 2 分钟跑一次 sp_cleanup_reservations |
+| 定时事件 | `evt_monthly_credit_recovery` | 每月 1 号凌晨自动恢复全员信誉分至 100 并清空黑名单 |
 
 ## 测试账号
 
