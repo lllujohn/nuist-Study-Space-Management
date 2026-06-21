@@ -724,7 +724,7 @@ def export_stats_csv(db: Session = Depends(get_db)) -> StreamingResponse:
 def get_my_points_logs(db: Session = Depends(get_db), user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     if user["role"] != "student":
         raise HTTPException(status_code=403, detail="仅学生可查看积分明细")
-    sid = user["id"]
+    sid = user["sub"]
     rows = db.execute(
         text("SELECT log_id, points_change, reason, created_at FROM study_points_logs WHERE student_id = :sid ORDER BY created_at DESC"),
         {"sid": sid}
