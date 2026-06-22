@@ -145,7 +145,7 @@ RATE_LIMIT_WINDOW = 5.0
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    if any(request.url.path.startswith(p) for p in RATE_LIMITED_PATHS):
+    if request.method != "OPTIONS" and any(request.url.path.startswith(p) for p in RATE_LIMITED_PATHS):
         client_ip = request.headers.get("X-Forwarded-For", request.headers.get("X-Real-IP", request.client.host if request.client else "unknown")).split(",")[0].strip()
         now = time.monotonic()
 

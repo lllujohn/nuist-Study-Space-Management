@@ -394,14 +394,13 @@ sp_exchange_label: BEGIN
     DECLARE v_prod_stock INT;
     DECLARE v_req_pts   INT;
     DECLARE v_status    TINYINT;
-    DECLARE v_version   INT;   -- 读取到的当前版本号
-    DECLARE v_affected  INT;   -- CAS 更新影响行数
 
     DECLARE EXIT HANDLER FOR SQLEXCEPTION
     BEGIN
+        GET DIAGNOSTICS CONDITION 1 @sqlstate = RETURNED_SQLSTATE, @errno = MYSQL_ERRNO, @text = MESSAGE_TEXT;
         ROLLBACK;
         SET p_code = 500;
-        SET p_msg = '内部错误，兑换已回滚';
+        SET p_msg = CONCAT('内部错误: ', @text);
     END;
 
     START TRANSACTION;
@@ -412,9 +411,9 @@ sp_exchange_label: BEGIN
         ROLLBACK; SET p_code = 404; SET p_msg = '学号不存在'; LEAVE sp_exchange_label;
     END IF;
 
-    SELECT stock, points_required, status, version
-    INTO   v_prod_stock, v_req_pts, v_status, v_version
-    FROM   products WHERE product_id = p_product_id;
+    SELECT stock, points_required, status
+    INTO   v_prod_stock, v_req_pts, v_status
+    FROM   products WHERE product_id = p_product_id FOR UPDATE;
 
     IF v_status = 0 THEN
         ROLLBACK; SET p_code = 400; SET p_msg = '商品已下架'; LEAVE sp_exchange_label;
@@ -429,17 +428,7 @@ sp_exchange_label: BEGIN
     UPDATE products
     SET    stock   = stock - 1,
            version = version + 1
-    WHERE  product_id = p_product_id
-      AND  version    = v_version;
-
-    SET v_affected = ROW_COUNT();
-
-    IF v_affected = 0 THEN
-        ROLLBACK;
-        SET p_code = 409;
-        SET p_msg = '并发冲突，请重试';
-        LEAVE sp_exchange_label;
-    END IF;
+    WHERE  product_id = p_product_id;
 
     UPDATE students
     SET    study_points = study_points - v_req_pts
